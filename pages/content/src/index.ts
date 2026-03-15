@@ -44,8 +44,14 @@ const adapters: SiteAdapter[] = [
       if (!el) return false;
       el.focus();
       if (el.tagName === 'TEXTAREA') {
-        (el as HTMLTextAreaElement).value = text;
-        el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+        const nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+        if (nativeSetter) {
+          nativeSetter.call(el, text);
+        } else {
+          (el as HTMLTextAreaElement).value = text;
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
       } else {
         el.textContent = '';
         document.execCommand('insertText', false, text);
@@ -55,53 +61,78 @@ const adapters: SiteAdapter[] = [
     },
 
     async submit() {
+      await sleep(300);
       const btn = findFirst(this.submitSelector) as HTMLButtonElement | null;
-      if (!btn || btn.disabled) return false;
-      btn.click();
-      return true;
+      if (btn && !btn.disabled) {
+        btn.click();
+        return true;
+      }
+      const input = findFirst(this.inputSelector) as HTMLElement;
+      if (input) {
+        input.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }),
+        );
+        return true;
+      }
+      return false;
     },
   },
 
   {
     name: 'gemini',
     hostMatch: (h) => h.includes('gemini.google.com'),
-    inputSelector: 'div.ql-editor.textarea p, .ql-editor p, div[contenteditable="true"]',
+    inputSelector: 'div.ql-editor.textarea, div.ql-editor, rich-textarea [contenteditable="true"]',
     submitSelector:
-      'button.send-button, button[aria-label*="Send"], button[data-testid="send-button"]',
-    responseContainerSelector: 'div.query-content, message-content',
+      'button.send-button, button[aria-label="Send message"], button[aria-label*="Send"]',
+    responseContainerSelector: 'message-content, .model-response-text, div.markdown',
 
     isGenerating() {
-      const stop = document.querySelector('button[aria-label="Stop generating"], mat-icon[data-mat-icon-name="stop_circle"]');
+      const stop = document.querySelector(
+        'button[aria-label="Stop generating"], mat-icon[data-mat-icon-name="stop_circle"], button[aria-label="Stop response"]',
+      );
       return !!stop && stop.getBoundingClientRect().width > 0;
     },
 
     getLastResponseElement() {
-      const msgs = document.querySelectorAll('message-content, .model-response-text, div.markdown');
+      const msgs = document.querySelectorAll(
+        'message-content, .model-response-text, div.markdown, .response-content',
+      );
       return msgs.length ? msgs[msgs.length - 1] : null;
     },
 
     async insertText(text: string) {
       const el = findFirst(this.inputSelector) as HTMLElement | null;
-      if (!el) return false;
+      if (!el) {
+        console.warn('[carl-superchat] Gemini: input element not found');
+        return false;
+      }
       el.focus();
-      el.textContent = '';
+      await sleep(100);
+      document.execCommand('selectAll', false);
       document.execCommand('insertText', false, text);
-      el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      console.log('[carl-superchat] Gemini: text inserted, length=', text.length);
       return true;
     },
 
     async submit() {
+      await sleep(500);
       const btn = findFirst(this.submitSelector) as HTMLButtonElement | null;
-      if (!btn || btn.disabled) {
-        const input = findFirst(this.inputSelector) as HTMLElement;
-        if (input) {
-          input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
-          return true;
-        }
-        return false;
+      console.log('[carl-superchat] Gemini: send button found=', !!btn, 'disabled=', btn?.disabled);
+      if (btn && !btn.disabled) {
+        btn.click();
+        return true;
       }
-      btn.click();
-      return true;
+      const input = findFirst(this.inputSelector) as HTMLElement;
+      if (input) {
+        console.log('[carl-superchat] Gemini: fallback Enter key');
+        input.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }),
+        );
+        return true;
+      }
+      return false;
     },
   },
 
@@ -316,7 +347,7 @@ async function handleSendCommand(cmd: { id: string; message: string; stream?: bo
     return;
   }
 
-  await sleep(200);
+  await sleep(adapter.name === 'gemini' ? 500 : 200);
 
   const submitted = await adapter.submit();
   if (!submitted) {
