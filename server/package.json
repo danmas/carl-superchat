@@ -1,0 +1,14 @@
+{
+  "name": "carl-superchat-server",
+  "version": "1.0.0",
+  "description": "Node.js server — REST API + WebSocket bridge for carl-superchat extension",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
