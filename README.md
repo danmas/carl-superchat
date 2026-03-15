@@ -114,6 +114,61 @@ data: {"done":true,"fullText":"Привет! Чем могу помочь?"}
 { "ok": true, "fullText": "Привет! Чем могу помочь?" }
 ```
 
+### Тестирование API (порт 3010)
+
+Перед тестами: сервер запущен (`node server.js` в `server/`), расширение загружено, вкладка нужного AI-чата (Qwen/Grok/Gemini) открыта в Chrome.
+
+**1. Статус подключения расширения**
+```powershell
+Invoke-RestMethod http://localhost:3010/api/status
+```
+
+**2. Список открытых AI-вкладок**
+```powershell
+Invoke-RestMethod http://localhost:3010/api/tabs
+```
+
+**3. Отправить вопрос и получить полный ответ (без стрима)**
+```powershell
+$body = @{ site = "qwen"; message = "Что такое Rust?"; stream = $false } | ConvertTo-Json
+Invoke-RestMethod -Uri http://localhost:3010/api/send -Method POST -ContentType "application/json" -Body $body
+```
+Ответ: `{ "ok": true, "fullText": "..." }`.
+
+**4. Со стримом (SSE)**
+```powershell
+$body = '{"site":"qwen","message":"Что такое Rust?","stream":true}'
+Invoke-WebRequest -Uri http://localhost:3010/api/send -Method POST -ContentType "application/json" -Body $body
+```
+Строки вида `data: {"chunk":"..."}`, в конце — `data: {"done":true,"fullText":"..."}`.
+
+**curl (если установлен)**
+```bash
+# статус
+curl http://localhost:3010/api/status
+
+# отправить сообщение
+curl -X POST http://localhost:3010/api/send -H "Content-Type: application/json" -d "{\"site\":\"qwen\",\"message\":\"Привет!\",\"stream\":false}"
+```
+
+**Python**
+```python
+import requests
+r = requests.post("http://localhost:3010/api/send", json={"site": "qwen", "message": "Привет!", "stream": False})
+print(r.json()["fullText"])
+```
+
+**JavaScript / Node.js**
+```javascript
+const r = await fetch("http://localhost:3010/api/send", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ site: "qwen", message: "Привет!", stream: false })
+});
+const data = await r.json();
+console.log(data.fullText);
+```
+
 ## WS-протокол (Server ↔ Extension)
 
 Для прямой интеграции без REST:
