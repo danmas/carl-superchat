@@ -24,7 +24,7 @@ const manifest = {
     '*://qwen.ai/*',
   ],
 
-  permissions: ['storage', 'tabs'],
+  permissions: ['storage', 'tabs', 'scripting'],
 
   background: {
     service_worker: 'background.js',

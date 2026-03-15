@@ -118,6 +118,30 @@ function handleServerCommand(cmd: any) {
   }
 }
 
+// Keep track of tabs with active requests so we can keep them awake
+const activeRequestTabs = new Set<number>();
+let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+function startKeepAlive() {
+  if (keepAliveTimer) return;
+  keepAliveTimer = setInterval(() => {
+    for (const tabId of activeRequestTabs) {
+      // Inject a tiny script to force the tab to "wake up" and process pending renders
+      chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => { /* wake up */ },
+      }).catch(() => {});
+    }
+  }, 500);
+}
+
+function stopKeepAlive() {
+  if (keepAliveTimer) {
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = null;
+  }
+}
+
 function routeToTab(cmdId: string, site: string, message: any) {
   const tab = findTabBySite(site);
   if (!tab) {
@@ -125,9 +149,16 @@ function routeToTab(cmdId: string, site: string, message: any) {
     return;
   }
 
+  if (message.type === 'bridge:send') {
+    activeRequestTabs.add(tab.tabId);
+    startKeepAlive();
+  }
+
   chrome.tabs.sendMessage(tab.tabId, message).catch((err) => {
     logger.error(`Failed to send to tab ${tab.tabId}:`, err);
     sendToServer({ id: cmdId, type: 'error', site, error: `Tab communication failed: ${err.message}` });
+    activeRequestTabs.delete(tab.tabId);
+    if (activeRequestTabs.size === 0) stopKeepAlive();
   });
 }
 
@@ -196,6 +227,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         site: message.site,
         fullText: message.fullText,
       });
+      if (tabId) { activeRequestTabs.delete(tabId); if (activeRequestTabs.size === 0) stopKeepAlive(); }
       return false;
     }
 
@@ -216,6 +248,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         site: message.site,
         error: message.error,
       });
+      if (tabId) { activeRequestTabs.delete(tabId); if (activeRequestTabs.size === 0) stopKeepAlive(); }
       return false;
     }
 

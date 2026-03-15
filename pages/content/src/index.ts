@@ -126,13 +126,25 @@ const adapters: SiteAdapter[] = [
         'div[class*="markdown-body"]',
         'div[class*="assistant-message"]',
         'div[class*="message-content"]',
+        'div[class*="chat-message"] div[class*="content"]',
         'div.markdown-body',
-        'div[class*="chat-message"]:last-child div[class*="content"]',
         'div[class*="answer"]',
+        '[class*="Message"] div[class*="content"]',
+        '[class*="message"] [class*="body"]',
+        'article div[class*="content"]',
+        'div[class*="prose"]',
       ];
       for (const sel of selectors) {
         const all = document.querySelectorAll(sel);
         if (all.length) return all[all.length - 1];
+      }
+      // Fallback: last element in chat area with substantial text (not input)
+      const chatArea = document.querySelector('[class*="chat"], [class*="conversation"], [class*="message-list"], [class*="messages"], main, [role="log"]') || document.body;
+      const candidates = chatArea.querySelectorAll('div[class*="message"], div[class*="content"], div[class*="bubble"], article, [class*="markdown"]');
+      for (let i = candidates.length - 1; i >= 0; i--) {
+        const el = candidates[i];
+        const t = el.textContent?.trim() || '';
+        if (t.length > 20 && !el.querySelector('textarea') && !el.closest('form')) return el;
       }
       return null;
     },
@@ -314,7 +326,7 @@ async function handleSendCommand(cmd: { id: string; message: string; stream?: bo
 
   chrome.runtime.sendMessage({ type: 'bridge:sent', id: cmd.id, site: adapter.name });
 
-  await sleep(1000);
+  await sleep(adapter.name === 'qwen' ? 2500 : 1000);
 
   observeResponse(
     adapter,
