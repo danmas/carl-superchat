@@ -6,7 +6,7 @@ import { WebSocketServer } from 'ws';
 import crypto from 'node:crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = 3010;
+const PORT = Number(process.env.PORT) || 3010;
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -39,6 +39,10 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/send' && req.method === 'POST') {
     return handleSend(req, res);
+  }
+
+  if (url.pathname === '/api/open' && req.method === 'POST') {
+    return handleOpen(req, res);
   }
 
   // Static files
@@ -137,6 +141,13 @@ function handleExtensionMessage(msg) {
       }
       pendingRequests.delete(id);
       break;
+
+    case 'tab_opened':
+      if (pending.res && !pending.res.writableEnded) {
+        jsonResponse(pending.res, 200, { ok: true, site: msg.site, tabId: msg.tabId, alreadyOpen: msg.alreadyOpen });
+      }
+      pendingRequests.delete(id);
+      break;
   }
 }
 
@@ -218,6 +229,25 @@ function handleSend(req, res) {
       if (p?.sseClientId) sseClients.delete(p.sseClientId);
       pendingRequests.delete(id);
     });
+  }).catch((err) => {
+    jsonResponse(res, 400, { ok: false, error: `Invalid JSON: ${err.message}` });
+  });
+}
+
+function handleOpen(req, res) {
+  if (!extensionWs || extensionWs.readyState !== 1) {
+    return jsonResponse(res, 503, { ok: false, error: 'Extension not connected' });
+  }
+
+  readBody(req).then((body) => {
+    const { site } = body;
+    if (!site) {
+      return jsonResponse(res, 400, { ok: false, error: 'site is required (grok, gemini, qwen)' });
+    }
+
+    const id = uid();
+    pendingRequests.set(id, { res, timeout: setTimeout(() => timeoutRequest(id), 10000) });
+    extensionWs.send(JSON.stringify({ id, action: 'open_tab', site }));
   }).catch((err) => {
     jsonResponse(res, 400, { ok: false, error: `Invalid JSON: ${err.message}` });
   });

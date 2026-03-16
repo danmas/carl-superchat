@@ -3,9 +3,16 @@ import { createLogger } from '@extension/shared/lib/logger';
 
 const logger = createLogger('BACKGROUND');
 
-const WS_URL = 'ws://localhost:3010';
+const WS_PORT = process.env['PORT'] || '3010';
+const WS_URL = `ws://localhost:${WS_PORT}`;
 const RECONNECT_INTERVAL = 3000;
 const HEARTBEAT_INTERVAL = 15000;
+
+const SITE_URLS: Record<string, string> = {
+  grok: 'https://grok.com/',
+  gemini: 'https://gemini.google.com/app',
+  qwen: 'https://chat.qwen.ai/',
+};
 
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -112,6 +119,11 @@ function handleServerCommand(cmd: any) {
       sendToServer({ id: cmd.id, type: 'tabs', tabs: Array.from(registeredTabs.values()) });
       break;
     }
+    case 'open_tab': {
+      const { id, site } = cmd;
+      openOrFocusTab(id, site);
+      break;
+    }
     default:
       logger.warn('Unknown server command:', cmd.action);
       sendToServer({ id: cmd.id, type: 'error', error: `Unknown action: ${cmd.action}` });
@@ -142,11 +154,36 @@ function stopKeepAlive() {
   }
 }
 
-function routeToTab(cmdId: string, site: string, message: any) {
-  const tab = findTabBySite(site);
+async function routeToTab(cmdId: string, site: string, message: any) {
+  let tab = findTabBySite(site);
+
   if (!tab) {
-    sendToServer({ id: cmdId, type: 'error', site, error: `No open tab for site: ${site}` });
-    return;
+    const url = SITE_URLS[site];
+    if (!url) {
+      sendToServer({ id: cmdId, type: 'error', site, error: `No open tab for site: ${site}` });
+      return;
+    }
+
+    logger.debug(`No tab for ${site}, auto-opening...`);
+    try {
+      await chrome.tabs.create({ url, active: false });
+    } catch (err: any) {
+      sendToServer({ id: cmdId, type: 'error', site, error: `Failed to auto-open tab: ${err.message}` });
+      return;
+    }
+
+    // Wait for content script to register (up to 15s)
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      tab = findTabBySite(site);
+      if (tab) break;
+    }
+
+    if (!tab) {
+      sendToServer({ id: cmdId, type: 'error', site, error: `Tab opened but content script did not register within 15s` });
+      return;
+    }
+    logger.debug(`Auto-opened tab ${tab.tabId} for ${site}`);
   }
 
   if (message.type === 'bridge:send') {
@@ -155,9 +192,9 @@ function routeToTab(cmdId: string, site: string, message: any) {
   }
 
   chrome.tabs.sendMessage(tab.tabId, message).catch((err) => {
-    logger.error(`Failed to send to tab ${tab.tabId}:`, err);
+    logger.error(`Failed to send to tab ${tab!.tabId}:`, err);
     sendToServer({ id: cmdId, type: 'error', site, error: `Tab communication failed: ${err.message}` });
-    activeRequestTabs.delete(tab.tabId);
+    activeRequestTabs.delete(tab!.tabId);
     if (activeRequestTabs.size === 0) stopKeepAlive();
   });
 }
@@ -167,6 +204,29 @@ function findTabBySite(site: string): TabInfo | undefined {
     if (info.site === site) return info;
   }
   return undefined;
+}
+
+async function openOrFocusTab(cmdId: string, site: string) {
+  const existing = findTabBySite(site);
+  if (existing) {
+    chrome.tabs.update(existing.tabId, { active: true }).catch(() => {});
+    sendToServer({ id: cmdId, type: 'tab_opened', site, tabId: existing.tabId, alreadyOpen: true });
+    return;
+  }
+
+  const url = SITE_URLS[site];
+  if (!url) {
+    sendToServer({ id: cmdId, type: 'error', site, error: `Unknown site: ${site}` });
+    return;
+  }
+
+  try {
+    const tab = await chrome.tabs.create({ url, active: false });
+    logger.debug(`Opened new tab for ${site}: ${tab.id}`);
+    sendToServer({ id: cmdId, type: 'tab_opened', site, tabId: tab.id!, alreadyOpen: false });
+  } catch (err: any) {
+    sendToServer({ id: cmdId, type: 'error', site, error: `Failed to open tab: ${err.message}` });
+  }
 }
 
 function broadcastToTabs(message: any) {
