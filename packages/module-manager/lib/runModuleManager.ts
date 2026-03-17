@@ -41,7 +41,7 @@ async function runModuleManager() {
   await new Promise(resolve => {
     setTimeout(resolve, 1500);
   });
-  execSync('pnpm install', { stdio: 'inherit' });
+  execSync('bun install', { stdio: 'inherit' });
 }
 
 export default runModuleManager;

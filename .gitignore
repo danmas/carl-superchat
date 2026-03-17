@@ -29,7 +29,6 @@ tsconfig.tsbuildinfo
 .trash
 .trash/*
 mcp-superassistant-proxy/bun.lock
-# pnpm-lock.yaml
 
 # Added by Task Master AI
 # Logs
@@ -60,7 +59,6 @@ tasks/
 
 .windsurfrules
 ADAPTER_BUTTON_STYLING.md
-bun.lock
 commit_diff.patch
 DYNAMIC_THEMING.md
 file_structure.md

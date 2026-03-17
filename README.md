@@ -25,24 +25,29 @@ Chrome-расширение + Node.js сервер для программног
                         └────────┘     └────────┘    └────────┘
 ```
 
+## Требования
+
+- [Bun](https://bun.sh) ≥ 1.0
+- Node.js ≥ 22 (для сервера, опционально можно запускать через `bun run`)
+
 ## Быстрый старт
 
 ### 1. Установка зависимостей
 
 ```bash
-# Корень проекта (расширение)
-npx pnpm install
+# Корень проекта (расширение + монорепо)
+bun install
 
-# Сервер
+# Сервер (отдельная папка, при необходимости)
 cd server
-npm install
+bun install
 ```
 
 ### 2. Сборка расширения
 
 ```bash
 # Из корня проекта
-npx pnpm base-build
+bun run build
 ```
 
 Собранное расширение появится в `dist/`.
@@ -55,9 +60,13 @@ npx pnpm base-build
 
 ### 4. Запуск сервера
 
+Расширение подключается к WebSocket на порту **3010** — сервер должен быть запущен.
+
 ```bash
 cd server
-node server.js
+node --env-file=../.env server.js
+# или
+bun run start
 ```
 
 Сервер стартует на порту **3010**:
@@ -201,7 +210,7 @@ carl-superchat/
 │   ├── server.js                 # REST API + WebSocket
 │   └── public/index.html        # Тестовая страница (чат-GUI)
 ├── dist/                      # Собранное расширение (Load unpacked)
-└── package.json               # Монорепо (pnpm + turbo)
+└── package.json               # Монорепо (bun + turbo)
 ```
 
 ## Поддерживаемые сайты
@@ -216,20 +225,23 @@ carl-superchat/
 
 По умолчанию всё работает на порту **3010**. Чтобы изменить:
 
-1. **Сервер** — в `server/server.js` поменяй `PORT`
-2. **Расширение** — в `chrome-extension/src/background/index.ts` поменяй `WS_URL`
-3. Пересобери: `npx pnpm base-build`
+1. **Сервер** — переменная `PORT` в `server/server.js` или в `.env`
+2. **Расширение** — в `chrome-extension/src/background/index.ts` (или через env при сборке) — `process.env['PORT']`
+3. Пересобери: `bun run build`
 
 ## Dev-режим
 
 ```bash
-# Сборка с watch (авто-пересборка при изменениях)
-npx pnpm base-dev
+# Расширение: сборка с watch + HMR (авто-пересборка при изменениях)
+bun run dev
 
-# Сервер с авто-рестартом
+# В отдельном терминале — сервер (нужен для работы расширения)
 cd server
-npm run dev
+node --env-file=../.env --watch server.js
+# или: bun run dev
 ```
+
+Без запущенного сервера на порту 3010 расширение будет показывать ошибку подключения WebSocket — это ожидаемо.
 
 ## На основе
 

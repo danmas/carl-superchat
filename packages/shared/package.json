@@ -12,12 +12,12 @@
   "main": "dist/index.mjs",
   "scripts": {
     "clean:bundle": "rimraf dist",
-    "clean:node_modules": "pnpm dlx rimraf node_modules",
+    "clean:node_modules": "bunx rimraf node_modules",
     "clean:turbo": "rimraf .turbo",
-    "clean": "pnpm clean:bundle && pnpm clean:node_modules && pnpm clean:turbo",
+    "clean": "bun run clean:bundle && bun run clean:node_modules && bun run clean:turbo",
     "ready": "tsc -b",
     "lint": "eslint .",
-    "lint:fix": "pnpm lint --fix",
+    "lint:fix": "bun run lint --fix",
     "prettier": "prettier . --write --ignore-path ../../.prettierignore",
     "type-check": "tsc --noEmit"
   },

@@ -6,15 +6,15 @@
   "private": true,
   "sideEffects": false,
   "scripts": {
-    "clean:node_modules": "pnpm dlx rimraf node_modules",
+    "clean:node_modules": "bunx rimraf node_modules",
     "clean:turbo": "rimraf .turbo",
-    "clean": "pnpm clean:turbo && pnpm clean:node_modules",
+    "clean": "bun run clean:turbo && bun run clean:node_modules",
     "ready": "tsc -b pre-build.tsconfig.json",
     "build": "vite build",
     "dev": "vite build --mode development",
     "test": "vitest run",
     "lint": "eslint .",
-    "lint:fix": "pnpm lint --fix",
+    "lint:fix": "bun run lint --fix",
     "prettier": "prettier . --write --ignore-path ../.prettierignore",
     "type-check": "tsc --noEmit"
   },
@@ -23,9 +23,9 @@
     "@extension/shared": "workspace:*",
     "@extension/storage": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.20.2",
-    "zod": "^4.3.5",
-    "vite-plugin-node-polyfills": "^0.23.0",
+    "vite-plugin-node-polyfills": "0.22.0",
     "webextension-polyfill": "^0.12.0",
+    "zod": "^4.3.5",
     "zustand": "^5.0.5"
   },
   "devDependencies": {
