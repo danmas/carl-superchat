@@ -111,8 +111,10 @@ function handleServerCommand(cmd: any) {
 
   switch (cmd.action) {
     case 'send': {
-      const { id, site, message } = cmd;
-      routeToTab(id, site, { type: 'bridge:send', id, message, stream: cmd.stream ?? true });
+      const { id, site, message, files } = cmd;
+      const msg: any = { type: 'bridge:send', id, message, stream: cmd.stream ?? true };
+      if (files?.length) msg.files = files;
+      routeToTab(id, site, msg);
       break;
     }
     case 'get_tabs': {

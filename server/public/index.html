@@ -52,12 +52,20 @@
     .msg.ai strong { color: #f0f0f0; }
     .msg.ai hr { border: none; border-top: 1px solid #333; margin: 0.6em 0; }
 
-    #input-area { padding: 12px 20px; background: #1a1a1a; border-top: 1px solid #333; display: flex; gap: 8px; }
+    #input-area { padding: 12px 20px; background: #1a1a1a; border-top: 1px solid #333; display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+    #input-area .input-row { flex: 1; min-width: 200px; display: flex; gap: 8px; align-items: flex-end; }
     #input-area textarea { flex: 1; resize: none; background: #2a2a2a; color: #e0e0e0; border: 1px solid #444; border-radius: 8px; padding: 10px 12px; font-size: 14px; font-family: inherit; min-height: 44px; max-height: 120px; }
     #input-area textarea:focus { outline: none; border-color: #4caf50; }
     #input-area button { background: #4caf50; color: #fff; border: none; border-radius: 8px; padding: 0 20px; font-size: 14px; cursor: pointer; font-weight: 500; }
     #input-area button:hover { background: #43a047; }
     #input-area button:disabled { background: #333; color: #666; cursor: not-allowed; }
+    #file-input { display: none; }
+    #attach-btn { background: #2a2a2a; color: #888; padding: 0 14px; border: 1px solid #444; }
+    #attach-btn:hover { background: #333; color: #e0e0e0; border-color: #555; }
+    #files-preview { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; margin-top: 4px; }
+    .file-pill { font-size: 12px; color: #888; background: #2a2a2a; border: 1px solid #444; border-radius: 6px; padding: 4px 8px; display: flex; align-items: center; gap: 6px; }
+    .file-pill .remove { cursor: pointer; color: #888; font-weight: bold; }
+    .file-pill .remove:hover { color: #f87171; }
   </style>
 </head>
 <body>
@@ -80,8 +88,13 @@
   <div id="messages"></div>
 
   <div id="input-area">
-    <textarea id="user-input" placeholder="Введи сообщение..." rows="1"></textarea>
-    <button id="send-btn">Send</button>
+    <input type="file" id="file-input" multiple accept="image/*,.pdf,.doc,.docx">
+    <div class="input-row">
+      <textarea id="user-input" placeholder="Введи сообщение или прикрепи файл..." rows="1"></textarea>
+      <button type="button" id="attach-btn" title="Прикрепить файл">📎</button>
+      <button id="send-btn">Send</button>
+    </div>
+    <div id="files-preview"></div>
   </div>
 
   <script>
@@ -97,8 +110,12 @@
     const statusEl = document.getElementById('status');
     const statusText = document.getElementById('status-text');
     const tabsInfo = document.getElementById('tabs-info');
+    const fileInput = document.getElementById('file-input');
+    const attachBtn = document.getElementById('attach-btn');
+    const filesPreview = document.getElementById('files-preview');
 
     let sending = false;
+    let pendingFiles = [];
 
     function renderMarkdown(el, text) {
       if (typeof marked !== 'undefined' && marked.parse) {
@@ -134,17 +151,62 @@
     });
 
     sendBtn.addEventListener('click', send);
+    attachBtn.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', async () => {
+      const files = Array.from(fileInput.files || []);
+      fileInput.value = '';
+      for (const file of files) {
+        const data = await readFileAsBase64(file);
+        pendingFiles.push({ name: file.name, mime: file.type || 'application/octet-stream', data });
+      }
+      renderFilesPreview();
+    });
+
+    function readFileAsBase64(file) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result.replace(/^data:[^;]+;base64,/, ''));
+        r.onerror = () => reject(new Error('Read failed'));
+        r.readAsDataURL(file);
+      });
+    }
+
+    function renderFilesPreview() {
+      filesPreview.innerHTML = '';
+      pendingFiles.forEach((f, i) => {
+        const pill = document.createElement('span');
+        pill.className = 'file-pill';
+        pill.innerHTML = `<span>${escapeHtml(f.name)}</span><span class="remove" data-i="${i}" title="Удалить">×</span>`;
+        pill.querySelector('.remove').addEventListener('click', () => {
+          pendingFiles.splice(i, 1);
+          renderFilesPreview();
+        });
+        filesPreview.appendChild(pill);
+      });
+    }
+
+    function escapeHtml(s) {
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
 
     async function send() {
       const text = inputEl.value.trim();
-      if (!text || sending) return;
+      const hasFiles = pendingFiles.length > 0;
+      if ((!text && !hasFiles) || sending) return;
 
       const site = siteSelect.value;
       const stream = streamToggle.checked;
 
-      addMessage(text, 'user');
+      const userLabel = hasFiles ? (text ? [text, pendingFiles.map(f => f.name).join(', ')].join(' — ') : '📎 ' + pendingFiles.map(f => f.name).join(', ')) : text;
+      addMessage(userLabel, 'user');
       inputEl.value = '';
       inputEl.style.height = 'auto';
+      const filesToSend = pendingFiles.slice();
+      pendingFiles = [];
+      renderFilesPreview();
       sending = true;
       sendBtn.disabled = true;
 
@@ -152,12 +214,15 @@
       if (stream) aiMsg.classList.add('streaming');
       let rawText = '';
 
+      const body = { site, message: text || '', stream };
+      if (filesToSend.length) body.files = filesToSend;
+
       try {
         if (stream) {
           const res = await fetch('/api/send', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ site, message: text, stream: true }),
+            body: JSON.stringify(body),
           });
 
           if (!res.ok) {
@@ -210,10 +275,11 @@
           }
           aiMsg.classList.remove('streaming');
         } else {
+          body.stream = false;
           const res = await fetch('/api/send', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ site, message: text, stream: false }),
+            body: JSON.stringify(body),
           });
           const data = await res.json();
           if (data.ok) {

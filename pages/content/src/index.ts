@@ -206,6 +206,30 @@ const adapters: SiteAdapter[] = [
   },
 ];
 
+// ── File attachment types & helpers ───────────────────────────────────
+
+interface FileData {
+  name: string;
+  mime: string;
+  data: string; // base64
+}
+
+// Both Grok and Qwen use id="filesUpload" (display:none), created dynamically on attach-button click
+const FILE_INPUT_ID = '#filesUpload';
+
+const ATTACH_BUTTON_SELECTORS: Record<string, string> = {
+  grok: 'button[aria-label="Attach file"], button[aria-label="Attach files"], button[aria-label="Attach media"], [data-testid="attach-file"], button[class*="attach"], label[for="filesUpload"]',
+  gemini: 'button[aria-label="Add files"], button[aria-label="Upload file"], button[aria-label="Add file"]',
+  // Qwen: clicking "+" (ant-dropdown-trigger) opens a menu; "Загрузить вложение" is the first li
+  qwen: 'span.ant-dropdown-trigger, div.mode-select span.ant-dropdown-trigger',
+};
+
+const FILE_PREVIEW_SELECTORS: Record<string, string> = {
+  grok: '[data-testid="file-preview"], .file-preview, [class*="attachment-preview"], [class*="file-pill"], [class*="uploaded"], [class*="file-chip"]',
+  gemini: '.file-preview, .xap-filed-upload-preview, [class*="file-chip"], [class*="upload-preview"]',
+  qwen: '.vision-item-container, [class*="vision-item"], [class*="file-item"], [class*="attachment-item"], [class*="upload-file"], [class*="file-card"]',
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────
 
 function findFirst(selectorList: string): Element | null {
@@ -223,6 +247,247 @@ function detectSite(): SiteAdapter | null {
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr.buffer;
+}
+
+function waitForElement(selectorList: string, timeout = 8000): Promise<Element | null> {
+  const existing = findFirst(selectorList);
+  if (existing) return Promise.resolve(existing);
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => { observer.disconnect(); resolve(null); }, timeout);
+    const observer = new MutationObserver(() => {
+      const el = findFirst(selectorList);
+      if (el) { clearTimeout(timer); observer.disconnect(); resolve(el); }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  });
+}
+
+// ── Strategy 1: Paste event (most universal — works like Ctrl+V) ─────
+
+async function attachViaPaste(siteName: string, adapter: SiteAdapter, files: File[]): Promise<boolean> {
+  const inputEl = findFirst(adapter.inputSelector) as HTMLElement | null;
+  const target = inputEl || document.body;
+  if (inputEl) inputEl.focus();
+
+  const dt = new DataTransfer();
+  files.forEach(f => dt.items.add(f));
+
+  const pasteEvent = new ClipboardEvent('paste', {
+    bubbles: true,
+    cancelable: true,
+    clipboardData: dt,
+  });
+
+  target.dispatchEvent(pasteEvent);
+  console.log(`[carl-superchat] Paste event dispatched on ${target.tagName}`);
+
+  const previewSel = FILE_PREVIEW_SELECTORS[siteName];
+  if (previewSel) {
+    const preview = await waitForElement(previewSel, 5000);
+    if (preview) {
+      console.log('[carl-superchat] Paste: file preview detected');
+      return true;
+    }
+  }
+  await sleep(1000);
+  return false;
+}
+
+// ── Strategy 2: file input with click interception ───────────────────
+
+async function triggerAttachButton(siteName: string): Promise<HTMLInputElement | null> {
+  const existing = document.querySelector(FILE_INPUT_ID) as HTMLInputElement | null;
+  if (existing) return existing;
+
+  const btnSel = ATTACH_BUTTON_SELECTORS[siteName];
+  const btn = btnSel ? (findFirst(btnSel) as HTMLElement | null) : null;
+  if (!btn) {
+    console.warn(`[carl-superchat] Attach button not found for ${siteName}`);
+    return null;
+  }
+
+  // Intercept HTMLInputElement.click to prevent native file picker from opening
+  const origClick = HTMLInputElement.prototype.click;
+  HTMLInputElement.prototype.click = function (this: HTMLInputElement) {
+    if (this.type === 'file') {
+      console.log('[carl-superchat] Blocked native file picker');
+      return;
+    }
+    return origClick.call(this);
+  };
+
+  let capturedInput: HTMLInputElement | null = null;
+
+  try {
+    if (siteName === 'qwen') {
+      btn.click();
+      const menuItem = await waitForElement('li.mode-select-common-item', 3000) as HTMLElement | null;
+      if (!menuItem) {
+        console.warn('[carl-superchat] Qwen: upload menu item not found');
+        return null;
+      }
+      menuItem.click();
+      await sleep(500);
+    } else {
+      btn.click();
+      await sleep(500);
+    }
+
+    capturedInput = document.querySelector(FILE_INPUT_ID) as HTMLInputElement | null;
+    if (!capturedInput) {
+      capturedInput = document.querySelector('input[type="file"]') as HTMLInputElement | null;
+    }
+  } finally {
+    HTMLInputElement.prototype.click = origClick;
+  }
+
+  return capturedInput;
+}
+
+async function attachViaInput(siteName: string, files: File[]): Promise<boolean> {
+  let fileInput = document.querySelector(FILE_INPUT_ID) as HTMLInputElement | null
+    || document.querySelector('input[type="file"]') as HTMLInputElement | null;
+
+  if (!fileInput) {
+    fileInput = await triggerAttachButton(siteName);
+  }
+
+  if (!fileInput) {
+    console.warn(`[carl-superchat] No file input found for ${siteName}`);
+    return false;
+  }
+
+  const dt = new DataTransfer();
+  files.forEach(f => dt.items.add(f));
+  fileInput.files = dt.files;
+  fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+  fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+
+  console.log(`[carl-superchat] Set ${files.length} file(s) on input, dispatched change`);
+
+  const previewSel = FILE_PREVIEW_SELECTORS[siteName];
+  if (previewSel) {
+    const preview = await waitForElement(previewSel, 5000);
+    if (preview) {
+      console.log('[carl-superchat] Input: file preview detected');
+      return true;
+    }
+  }
+  await sleep(1000);
+  return false;
+}
+
+// ── Strategy 3: Drag and drop ────────────────────────────────────────
+
+async function attachViaDragDrop(siteName: string, adapter: SiteAdapter, files: File[]): Promise<boolean> {
+  const target = (findFirst(adapter.inputSelector) as HTMLElement | null)
+    || (findFirst('div[contenteditable="true"], [role="textbox"]') as HTMLElement | null)
+    || document.body;
+
+  const dt = new DataTransfer();
+  files.forEach(f => dt.items.add(f));
+
+  target.dispatchEvent(new DragEvent('dragenter', { bubbles: true, dataTransfer: dt }));
+  await sleep(50);
+  target.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+  await sleep(50);
+  target.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: dt }));
+
+  console.log(`[carl-superchat] Drop dispatched on ${target.tagName}`);
+
+  const previewSel = FILE_PREVIEW_SELECTORS[siteName];
+  if (previewSel) {
+    const preview = await waitForElement(previewSel, 5000);
+    if (preview) {
+      console.log('[carl-superchat] Drop: file preview detected');
+      return true;
+    }
+  }
+  await sleep(1000);
+  return false;
+}
+
+// ── Main attach: try strategies in order ─────────────────────────────
+
+async function attachFiles(siteName: string, filesData: FileData[]): Promise<boolean> {
+  if (!filesData.length) return true;
+
+  const currentAdapter = adapters.find(a => a.name === siteName);
+  if (!currentAdapter) return false;
+
+  const files = filesData.map(fd =>
+    new File([base64ToArrayBuffer(fd.data)], fd.name, { type: fd.mime }),
+  );
+
+  // Strategy 1: paste (most reliable, works like Ctrl+V)
+  console.log(`[carl-superchat] Trying paste strategy for ${siteName}...`);
+  if (await attachViaPaste(siteName, currentAdapter, files)) {
+    console.log(`[carl-superchat] Attached ${files.length} file(s) via paste`);
+    return true;
+  }
+
+  // Strategy 2: file input with click interception
+  console.log(`[carl-superchat] Paste didn't work, trying input strategy for ${siteName}...`);
+  if (await attachViaInput(siteName, files)) {
+    console.log(`[carl-superchat] Attached ${files.length} file(s) via input`);
+    return true;
+  }
+
+  // Strategy 3: drag and drop
+  console.log(`[carl-superchat] Input didn't work, trying drag-drop for ${siteName}...`);
+  if (await attachViaDragDrop(siteName, currentAdapter, files)) {
+    console.log(`[carl-superchat] Attached ${files.length} file(s) via drag-drop`);
+    return true;
+  }
+
+  // None worked — log but don't fail (file might have attached without detectable preview)
+  console.warn(`[carl-superchat] No strategy confirmed file preview for ${siteName}. Proceeding anyway.`);
+  return true;
+}
+
+// ── Wait for file upload to complete ─────────────────────────────────
+
+const UPLOAD_LOADING_SELECTORS: Record<string, string> = {
+  qwen: '.vision-spinner, .circle-spinner, [class*="vision-spinner"], [class*="circle-spinner"]',
+  grok: '[class*="uploading"], [class*="progress"], [class*="spinner"]',
+  gemini: '[class*="uploading"], [class*="progress"], [class*="spinner"]',
+};
+
+async function waitForFileUpload(siteName: string, maxWait = 30000): Promise<void> {
+  const loadingSel = UPLOAD_LOADING_SELECTORS[siteName];
+  const start = Date.now();
+
+  // First: short initial wait for upload indicators to appear
+  await sleep(1500);
+
+  // Then: poll until no loading indicators remain
+  while (Date.now() - start < maxWait) {
+    const loadingEl = loadingSel ? findFirst(loadingSel) : null;
+    const sendBtn = findFirst(
+      adapters.find(a => a.name === siteName)?.submitSelector || 'button.send-button',
+    ) as HTMLButtonElement | null;
+
+    const stillLoading = loadingEl && loadingEl.getBoundingClientRect().width > 0;
+    const btnDisabled = sendBtn && (sendBtn.disabled || sendBtn.getAttribute('aria-disabled') === 'true');
+
+    if (!stillLoading && !btnDisabled) {
+      console.log(`[carl-superchat] File upload complete (${Date.now() - start}ms)`);
+      return;
+    }
+
+    console.log(`[carl-superchat] Waiting for upload... loading=${!!stillLoading} btnDisabled=${!!btnDisabled}`);
+    await sleep(1000);
+  }
+
+  console.warn(`[carl-superchat] File upload wait timeout (${maxWait}ms), proceeding anyway`);
 }
 
 // ── Response observer ────────────────────────────────────────────────
@@ -336,10 +601,24 @@ if (adapter) {
   console.log('[carl-superchat] No adapter matched for', window.location.hostname);
 }
 
-async function handleSendCommand(cmd: { id: string; message: string; stream?: boolean }) {
+async function handleSendCommand(cmd: { id: string; message: string; stream?: boolean; files?: FileData[] }) {
   if (!adapter) return;
 
   const stream = cmd.stream ?? true;
+
+  if (cmd.files?.length) {
+    try {
+      const ok = await attachFiles(adapter.name, cmd.files);
+      if (!ok) {
+        chrome.runtime.sendMessage({ type: 'bridge:error', id: cmd.id, site: adapter.name, error: 'Failed to attach files' });
+        return;
+      }
+      await waitForFileUpload(adapter.name);
+    } catch (err: any) {
+      chrome.runtime.sendMessage({ type: 'bridge:error', id: cmd.id, site: adapter.name, error: `File attach error: ${err.message}` });
+      return;
+    }
+  }
 
   const inserted = await adapter.insertText(cmd.message);
   if (!inserted) {

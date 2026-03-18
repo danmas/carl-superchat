@@ -192,12 +192,14 @@ function handleSend(req, res) {
   }
 
   readBody(req).then((body) => {
-    const { site, message, stream } = body;
-    if (!site || !message) {
-      return jsonResponse(res, 400, { ok: false, error: 'site and message are required' });
+    const { site, message, stream, files } = body;
+    if (!site || (!message && (!files || !files.length))) {
+      return jsonResponse(res, 400, { ok: false, error: 'site and (message or files) are required' });
     }
 
     const shouldStream = stream !== false;
+    const hasFiles = Array.isArray(files) && files.length > 0;
+    const timeout = hasFiles ? 180000 : 120000;
     const id = uid();
 
     if (shouldStream) {
@@ -212,17 +214,19 @@ function handleSend(req, res) {
         sseClientId: sseId,
         streaming: true,
         fullText: '',
-        timeout: setTimeout(() => timeoutRequest(id), 120000),
+        timeout: setTimeout(() => timeoutRequest(id), timeout),
       });
     } else {
       pendingRequests.set(id, {
         res,
         streaming: false,
-        timeout: setTimeout(() => timeoutRequest(id), 120000),
+        timeout: setTimeout(() => timeoutRequest(id), timeout),
       });
     }
 
-    extensionWs.send(JSON.stringify({ id, action: 'send', site, message, stream: shouldStream }));
+    const payload = { id, action: 'send', site, message: message || '', stream: shouldStream };
+    if (hasFiles) payload.files = files;
+    extensionWs.send(JSON.stringify(payload));
 
     req.on('close', () => {
       const p = pendingRequests.get(id);
@@ -280,10 +284,19 @@ function jsonResponse(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-function readBody(req) {
+function readBody(req, maxSize = 50 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     let body = '';
-    req.on('data', (chunk) => (body += chunk));
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > maxSize) {
+        reject(new Error(`Body too large (max ${(maxSize / 1024 / 1024) | 0} MB)`));
+        req.destroy();
+        return;
+      }
+      body += chunk;
+    });
     req.on('end', () => {
       try {
         resolve(JSON.parse(body));

@@ -100,16 +100,29 @@ bun run start
 
 ### `POST /api/send`
 
-Отправка сообщения в AI-чат.
+Отправка сообщения (и/или файлов) в AI-чат.
 
 **Body:**
 ```json
-{ "site": "grok", "message": "Привет!", "stream": true }
+{
+  "site": "grok",
+  "message": "Привет!",
+  "stream": true,
+  "files": [
+    { "name": "photo.jpg", "mime": "image/jpeg", "data": "<base64>" }
+  ]
+}
 ```
 
 - `site` — `"grok"`, `"gemini"` или `"qwen"`
-- `message` — текст сообщения
+- `message` — текст сообщения (необязателен, если есть `files`)
 - `stream` — `true` (SSE, по умолчанию) или `false` (JSON после полного ответа)
+- `files` — массив файлов (необязателен):
+  - `name` — имя файла с расширением
+  - `mime` — MIME-тип (`image/jpeg`, `application/pdf`, ...)
+  - `data` — содержимое файла в base64
+
+Файлы прикрепляются к чату **до** вставки текста. Лимит тела запроса — 50 МБ. Таймаут ожидания ответа при наличии файлов — 180с (без файлов — 120с).
 
 **Ответ при `stream: true`** (SSE):
 ```
@@ -151,31 +164,81 @@ Invoke-WebRequest -Uri http://localhost:3010/api/send -Method POST -ContentType 
 ```
 Строки вида `data: {"chunk":"..."}`, в конце — `data: {"done":true,"fullText":"..."}`.
 
+**5. Отправить файл (без стрима)**
+```powershell
+$bytes = [System.IO.File]::ReadAllBytes("C:\path\to\photo.jpg")
+$base64 = [Convert]::ToBase64String($bytes)
+$body = @{
+  site = "grok"
+  message = "Что на этом фото?"
+  stream = $false
+  files = @(@{ name = "photo.jpg"; mime = "image/jpeg"; data = $base64 })
+} | ConvertTo-Json -Depth 3
+Invoke-RestMethod -Uri http://localhost:3010/api/send -Method POST -ContentType "application/json" -Body $body
+```
+
 **curl (если установлен)**
 ```bash
 # статус
 curl http://localhost:3010/api/status
 
 # отправить сообщение
-curl -X POST http://localhost:3010/api/send -H "Content-Type: application/json" -d "{\"site\":\"qwen\",\"message\":\"Привет!\",\"stream\":false}"
+curl -X POST http://localhost:3010/api/send \
+  -H "Content-Type: application/json" \
+  -d '{"site":"qwen","message":"Привет!","stream":false}'
+
+# отправить файл
+BASE64=$(base64 -w0 photo.jpg)
+curl -X POST http://localhost:3010/api/send \
+  -H "Content-Type: application/json" \
+  -d "{\"site\":\"grok\",\"message\":\"Опиши фото\",\"stream\":false,\"files\":[{\"name\":\"photo.jpg\",\"mime\":\"image/jpeg\",\"data\":\"$BASE64\"}]}"
 ```
 
 **Python**
 ```python
-import requests
+import requests, base64
+
+# текст
 r = requests.post("http://localhost:3010/api/send", json={"site": "qwen", "message": "Привет!", "stream": False})
+print(r.json()["fullText"])
+
+# файл
+with open("photo.jpg", "rb") as f:
+    b64 = base64.b64encode(f.read()).decode()
+r = requests.post("http://localhost:3010/api/send", json={
+    "site": "grok",
+    "message": "Что на этом фото?",
+    "stream": False,
+    "files": [{"name": "photo.jpg", "mime": "image/jpeg", "data": b64}]
+})
 print(r.json()["fullText"])
 ```
 
 **JavaScript / Node.js**
 ```javascript
+import { readFileSync } from 'fs';
+
+// текст
 const r = await fetch("http://localhost:3010/api/send", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ site: "qwen", message: "Привет!", stream: false })
 });
-const data = await r.json();
-console.log(data.fullText);
+console.log((await r.json()).fullText);
+
+// файл
+const b64 = readFileSync("photo.jpg").toString("base64");
+const r2 = await fetch("http://localhost:3010/api/send", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    site: "grok",
+    message: "Что на фото?",
+    stream: false,
+    files: [{ name: "photo.jpg", mime: "image/jpeg", data: b64 }]
+  })
+});
+console.log((await r2.json()).fullText);
 ```
 
 ## WS-протокол (Server ↔ Extension)
@@ -184,16 +247,23 @@ console.log(data.fullText);
 
 ```
 Server → Extension:
-  { id, action: "send", site, message, stream? }
+  { id, action: "send", site, message, stream?, files? }
   { id, action: "get_tabs" }
+  { id, action: "open_tab", site }
 
 Extension → Server:
   { id, type: "sent", site, tabId }
   { id, type: "chunk", site, text }
   { id, type: "done", site, fullText }
   { id, type: "error", site, error }
-  { type: "tabs", tabs: [...] }
+  { id, type: "tabs", tabs: [...] }
+  { id, type: "tab_opened", site, tabId, alreadyOpen }
+  { type: "heartbeat", tabs: [...] }
+  { type: "tab_registered", tabId, site, url, title }
+  { type: "tab_unregistered", tabId, site? }
 ```
+
+Поле `files` — массив `{ name, mime, data }` (base64), передаётся в content script как есть.
 
 ## Структура проекта
 
@@ -242,6 +312,26 @@ node --env-file=../.env --watch server.js
 ```
 
 Без запущенного сервера на порту 3010 расширение будет показывать ошибку подключения WebSocket — это ожидаемо.
+
+## Прикрепление файлов — как работает
+
+1. API-клиент отправляет `POST /api/send` с массивом `files` (base64)
+2. Сервер прокидывает данные через WebSocket в background SW
+3. Background SW маршрутизирует в нужную вкладку через `chrome.tabs.sendMessage`
+4. Content script (адаптер):
+   - Декодирует base64 → `File` объекты через `DataTransfer`
+   - Находит `<input type="file">` (или кликает кнопку "прикрепить" чтобы он появился)
+   - Устанавливает файлы и триггерит `change` event
+   - Ждёт появления превью загруженного файла (MutationObserver)
+   - Fallback: drag-and-drop на зону ввода
+   - Затем вставляет текст и жмёт "Send"
+5. Ответ стримится обратно как обычно
+
+**Поддерживаемые форматы:** jpg, png, webp, gif, pdf, doc — всё что принимает конкретный AI-чат. Несколько файлов за раз поддерживаются.
+
+**Лимиты:** до ~20 МБ на файл (в base64 ≈ 27 МБ, лимит body — 50 МБ).
+
+> **Селекторы** кнопок и input'ов могут меняться при обновлении сайтов. Если аттач перестал работать — открой F12 на сайте, найди `input[type="file"]` и кнопку прикрепления, скорректируй константы `FILE_INPUT_SELECTORS` / `ATTACH_BUTTON_SELECTORS` / `FILE_PREVIEW_SELECTORS` в `pages/content/src/index.ts`.
 
 ## На основе
 
