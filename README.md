@@ -78,7 +78,9 @@ bun run start
 
 1. Открой в Chrome один из AI-чатов: [grok.com](https://grok.com), [gemini.google.com](https://gemini.google.com), [chat.qwen.ai](https://chat.qwen.ai)
 2. Открой тестовую страницу `http://localhost:3010/`
-3. Выбери сайт, напиши сообщение, нажми Send
+3. Выбери сайт, напиши сообщение (или прикрепи файл кнопкой **📎**), нажми Send
+
+После изменений в content script: **`bun run build`** из корня, затем в `chrome://extensions/` обнови расширение (кнопка ⟳). Пока идёт сборка, папка `dist/` может быть пустой — Chrome тогда покажет «Manifest file is missing»; дождись окончания `bun run build`.
 
 ## REST API
 
@@ -122,7 +124,11 @@ bun run start
   - `mime` — MIME-тип (`image/jpeg`, `application/pdf`, ...)
   - `data` — содержимое файла в base64
 
-Файлы прикрепляются к чату **до** вставки текста. Лимит тела запроса — 50 МБ. Таймаут ожидания ответа при наличии файлов — 180с (без файлов — 120с).
+Файлы прикрепляются к чату **до** вставки текста. Content script **ждёт окончания загрузки файла на сторону сайта** (например, на Qwen — пока не исчезнет спиннер `.vision-spinner`), затем вставляет текст и жмёт Send — иначе чат может ответить «файлы ещё загружаются».
+
+Лимит тела запроса — 50 МБ. Таймаут ожидания ответа при наличии файлов — 180с (без файлов — 120с).
+
+**Файлы проверены:** **Grok** и **Qwen** (изображения, PDF, md и т.д.). **Gemini** — та же схема API, при сбоях смотри селекторы в `pages/content/src/index.ts`.
 
 **Ответ при `stream: true`** (SSE):
 ```
@@ -285,11 +291,11 @@ carl-superchat/
 
 ## Поддерживаемые сайты
 
-| Сайт | Hostname | Адаптер |
-|------|----------|---------|
-| Grok | `grok.com`, `x.com/i/grok` | `grok` |
-| Google Gemini | `gemini.google.com` | `gemini` |
-| Qwen Chat | `chat.qwen.ai` | `qwen` |
+| Сайт | Hostname | Адаптер | Файлы (API) |
+|------|----------|---------|-------------|
+| Grok | `grok.com`, `x.com/i/grok` | `grok` | да |
+| Google Gemini | `gemini.google.com` | `gemini` | API готов, при сбоях — селекторы |
+| Qwen Chat | `chat.qwen.ai` | `qwen` | да |
 
 ## Настройка порта
 
@@ -315,23 +321,20 @@ node --env-file=../.env --watch server.js
 
 ## Прикрепление файлов — как работает
 
-1. API-клиент отправляет `POST /api/send` с массивом `files` (base64)
-2. Сервер прокидывает данные через WebSocket в background SW
-3. Background SW маршрутизирует в нужную вкладку через `chrome.tabs.sendMessage`
-4. Content script (адаптер):
-   - Декодирует base64 → `File` объекты через `DataTransfer`
-   - Находит `<input type="file">` (или кликает кнопку "прикрепить" чтобы он появился)
-   - Устанавливает файлы и триггерит `change` event
-   - Ждёт появления превью загруженного файла (MutationObserver)
-   - Fallback: drag-and-drop на зону ввода
-   - Затем вставляет текст и жмёт "Send"
-5. Ответ стримится обратно как обычно
+1. `POST /api/send` с `files: [{ name, mime, data (base64) }]`
+2. Сервер → WebSocket → background → `chrome.tabs.sendMessage` → content script
+3. **Прикрепление** (по очереди, пока не сработает превью):
+   - **Paste** на поле ввода (как Ctrl+V)
+   - **Input** `#filesUpload` / `input[type="file"]` (Grok/Qwen часто используют `#filesUpload`; у Qwen меню **+** → «Загрузить вложение», при необходимости блокируется нативный file picker)
+   - **Drag-and-drop** на textarea / зону ввода — на **Qwen** обычно срабатывает именно он
+4. **Ожидание загрузки на сервер чата** (до ~30 с): на Qwen — пока виден `.vision-spinner` / `.circle-spinner`; иначе Send уходит раньше времени («некоторые файлы ещё загружаются»).
+5. Вставка текста → Send → стрим ответа как обычно
 
-**Поддерживаемые форматы:** jpg, png, webp, gif, pdf, doc — всё что принимает конкретный AI-чат. Несколько файлов за раз поддерживаются.
+**Форматы:** то, что принимает сам чат (jpg, png, webp, pdf, md, …). В `files` можно передать несколько элементов за один запрос.
 
-**Лимиты:** до ~20 МБ на файл (в base64 ≈ 27 МБ, лимит body — 50 МБ).
+**Лимиты:** ~20 МБ на файл практично; body до 50 МБ.
 
-> **Селекторы** кнопок и input'ов могут меняться при обновлении сайтов. Если аттач перестал работать — открой F12 на сайте, найди `input[type="file"]` и кнопку прикрепления, скорректируй константы `FILE_INPUT_SELECTORS` / `ATTACH_BUTTON_SELECTORS` / `FILE_PREVIEW_SELECTORS` в `pages/content/src/index.ts`.
+> **Селекторы** меняются с обновлениями сайтов. См. `pages/content/src/index.ts`: стратегии attach, `FILE_PREVIEW_SELECTORS`, `UPLOAD_LOADING_SELECTORS`, `ATTACH_BUTTON_SELECTORS` (Qwen: `span.ant-dropdown-trigger` + пункт меню).
 
 ## На основе
 
