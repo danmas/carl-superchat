@@ -66,6 +66,34 @@
     .file-pill { font-size: 12px; color: #888; background: #2a2a2a; border: 1px solid #444; border-radius: 6px; padding: 4px 8px; display: flex; align-items: center; gap: 6px; }
     .file-pill .remove { cursor: pointer; color: #888; font-weight: bold; }
     .file-pill .remove:hover { color: #f87171; }
+
+    /* Terminal Agent UI */
+    #agent-panel { display: none; padding: 12px 20px; background: #1a1a1a; border-top: 1px solid #333; }
+    #agent-panel.active { display: block; }
+    #agent-panel .agent-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    #agent-panel .agent-header h3 { font-size: 14px; color: #4caf50; display: flex; align-items: center; gap: 8px; }
+    #agent-panel .agent-header h3 span.step { color: #888; font-weight: normal; }
+    #agent-panel .agent-status { font-size: 12px; color: #888; }
+    #agent-panel .agent-content { background: #111; border-radius: 6px; padding: 12px; margin-bottom: 10px; }
+    #agent-panel .agent-type { font-size: 11px; color: #888; text-transform: uppercase; margin-bottom: 4px; }
+    #agent-panel .agent-command { font-family: 'Consolas', 'Fira Code', monospace; font-size: 13px; color: #60a5fa; white-space: pre-wrap; word-break: break-all; }
+    #agent-panel .agent-question { font-size: 14px; color: #e0e0e0; white-space: pre-wrap; }
+    #agent-panel .agent-message { font-size: 14px; color: #aaa; white-space: pre-wrap; }
+    #agent-panel .agent-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    #agent-panel .agent-actions button { padding: 8px 16px; font-size: 13px; border-radius: 6px; border: none; cursor: pointer; }
+    #agent-panel .agent-actions .btn-execute { background: #4caf50; color: #fff; }
+    #agent-panel .agent-actions .btn-execute:hover { background: #43a047; }
+    #agent-panel .agent-actions .btn-skip { background: #2a2a2a; color: #888; border: 1px solid #444; }
+    #agent-panel .agent-actions .btn-skip:hover { background: #333; color: #e0e0e0; }
+    #agent-panel .agent-actions .btn-cancel { background: #dc2626; color: #fff; margin-left: auto; }
+    #agent-panel .agent-actions .btn-cancel:hover { background: #b91c1c; }
+    #agent-panel .agent-actions .btn-continue { background: #2563eb; color: #fff; }
+    #agent-panel .agent-actions .btn-continue:hover { background: #1d4ed8; }
+    #agent-panel .agent-input { width: 100%; margin-bottom: 10px; }
+    #agent-panel .agent-input textarea { width: 100%; resize: none; background: #2a2a2a; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; padding: 10px; font-size: 13px; min-height: 60px; }
+    #agent-panel .agent-input textarea:focus { outline: none; border-color: #4caf50; }
+    .msg.agent { align-self: flex-start; background: #1a2e1a; color: #4caf50; border-left: 3px solid #4caf50; }
+    .msg.agent-cmd { font-family: 'Consolas', 'Fira Code', monospace; background: #111; color: #60a5fa; }
   </style>
 </head>
 <body>
@@ -86,6 +114,22 @@
   </div>
 
   <div id="messages"></div>
+
+  <!-- Terminal Agent Panel -->
+  <div id="agent-panel">
+    <div class="agent-header">
+      <h3>🤖 Terminal Agent <span class="step" id="agent-step">Step 1/100</span></h3>
+      <span class="agent-status" id="agent-status">Initializing...</span>
+    </div>
+    <div class="agent-content">
+      <div class="agent-type" id="agent-type">Command</div>
+      <div id="agent-content"></div>
+    </div>
+    <div class="agent-input" id="agent-input-area" style="display:none">
+      <textarea id="agent-input" placeholder="Your answer..."></textarea>
+    </div>
+    <div class="agent-actions" id="agent-actions"></div>
+  </div>
 
   <div id="input-area">
     <input type="file" id="file-input" multiple accept="image/*,.pdf,.doc,.docx">
@@ -116,6 +160,8 @@
 
     let sending = false;
     let pendingFiles = [];
+
+    // Terminal Agent state (moved below to agent functions section)
 
     function renderMarkdown(el, text) {
       if (typeof marked !== 'undefined' && marked.parse) {
@@ -196,6 +242,17 @@
       const text = inputEl.value.trim();
       const hasFiles = pendingFiles.length > 0;
       if ((!text && !hasFiles) || sending) return;
+
+      // Check for Terminal Agent trigger
+      if (text.startsWith('ta: ') || text.startsWith('ta:')) {
+        const prompt = text.replace(/^ta:\s*/, '').trim();
+        if (prompt) {
+          inputEl.value = '';
+          inputEl.style.height = 'auto';
+          startTerminalAgent(prompt);
+        }
+        return;
+      }
 
       const site = siteSelect.value;
       const stream = streamToggle.checked;
@@ -339,6 +396,434 @@
     checkTabs();
     setInterval(checkStatus, 5000);
     setInterval(checkTabs, 10000);
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Terminal Agent Functions (via Extension -> AI Chat)
+    // ═══════════════════════════════════════════════════════════════════
+
+    const agentPanel = document.getElementById('agent-panel');
+    const agentStep = document.getElementById('agent-step');
+    const agentStatusEl = document.getElementById('agent-status');
+    const agentType = document.getElementById('agent-type');
+    const agentContentEl = document.getElementById('agent-content');
+    const agentActions = document.getElementById('agent-actions');
+    const agentInputArea = document.getElementById('agent-input-area');
+    const agentInputEl = document.getElementById('agent-input');
+
+    // Agent state
+    let agentSession = null;
+    let agentState = 'idle'; // idle, waiting_cmd, waiting_user, done
+    let agentMessages = []; // message history for AI
+    let agentStepNum = 1;
+
+    async function startTerminalAgent(userPrompt) {
+      addMessage(`ta: ${userPrompt}`, 'user');
+      addMessage('🤖 Starting Terminal Agent...', 'agent');
+
+      try {
+        // 1. Create session on server (get system prompt)
+        const res = await fetch('/api/agent/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'standalone', prompt: userPrompt })
+        });
+        const data = await res.json();
+
+        if (!data.success) {
+          addMessage(`Agent Error: ${data.error}`, 'error');
+          return;
+        }
+
+        agentSession = data.data.sessionId;
+        agentMessages = data.data.messages;
+        agentStepNum = 1;
+
+        // 2. Send to AI via Extension (first message = full context)
+        await sendToAIChat(agentMessages, true);
+
+      } catch (err) {
+        addMessage(`Agent Error: ${err.message}`, 'error');
+        resetAgent();
+      }
+    }
+
+    async function sendToAIChat(messages, isFirstMessage = false) {
+      const site = siteSelect.value;
+      const stream = streamToggle.checked;
+
+      // Determine what to send:
+      // - First message: full context (system + user prompt)
+      // - Subsequent: only last user message (AI chat remembers context)
+      let messageToSend;
+      
+      if (isFirstMessage || messages.length <= 2) {
+        // First call: send full context
+        messageToSend = messages.map(m => {
+          if (m.role === 'system') return `[System Instructions]\n${m.content}`;
+          if (m.role === 'user') return `[User]\n${m.content}`;
+          return `[Assistant]\n${m.content}`;
+        }).join('\n\n---\n\n');
+      } else {
+        // Subsequent calls: send only the last user message
+        const lastUserMsg = messages.filter(m => m.role === 'user').pop();
+        messageToSend = lastUserMsg ? lastUserMsg.content : '';
+      }
+
+      if (!messageToSend) {
+        addMessage('No message to send', 'error');
+        return;
+      }
+
+      addMessage('⏳ Waiting for AI response...', 'system');
+
+      try {
+        const res = await fetch('/api/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ site, message: messageToSend, stream })
+        });
+
+        if (!res.ok) {
+          const err = await res.text();
+          addMessage(`AI Error: ${err}`, 'error');
+          resetAgent();
+          return;
+        }
+
+        let aiResponse = '';
+
+        if (stream) {
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+
+            for (const line of lines) {
+              if (!line.startsWith('data: ')) continue;
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.chunk) {
+                  aiResponse += data.chunk;
+                } else if (data.done) {
+                  aiResponse = data.fullText;
+                } else if (data.error) {
+                  addMessage(`AI Error: ${data.error}`, 'error');
+                  resetAgent();
+                  return;
+                }
+              } catch {}
+            }
+          }
+        } else {
+          const data = await res.json();
+          if (data.ok) {
+            aiResponse = data.fullText;
+          } else {
+            addMessage(`AI Error: ${data.error}`, 'error');
+            resetAgent();
+            return;
+          }
+        }
+
+        // Process AI response
+        await processAIResponse(aiResponse);
+
+      } catch (err) {
+        addMessage(`Network Error: ${err.message}`, 'error');
+        resetAgent();
+      }
+    }
+
+    async function processAIResponse(aiContent) {
+      if (!agentSession) return;
+
+      try {
+        // Send AI response to server for parsing
+        const res = await fetch(`/api/agent/${agentSession}/ai-response`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ aiContent })
+        });
+        const data = await res.json();
+
+        if (!data.success) {
+          addMessage(`Agent Error: ${data.error}`, 'error');
+          resetAgent();
+          return;
+        }
+
+        const { type, handled, parsed, result, userContent, step, state, done } = data.data;
+
+        // Update state
+        agentState = state || 'idle';
+        agentStepNum = step || agentStepNum;
+
+        // If server handled it (memory/GET-FILE), send result back to AI
+        if (handled) {
+          addMessage(`[${type}] ${result.substring(0, 100)}${result.length > 100 ? '...' : ''}`, 'agent');
+          
+          // Add result to messages and send to AI
+          agentMessages.push({ role: 'assistant', content: aiContent });
+          agentMessages.push({ role: 'user', content: result + `\n\n[Step ${agentStepNum} of 100]` });
+          
+          await sendToAIChat(agentMessages);
+          return;
+        }
+
+        // Show in Agent UI
+        showAgentUI(parsed, step);
+
+        // Add AI message to history
+        agentMessages.push({ role: 'assistant', content: aiContent });
+
+        // Auto-continue for MESSAGE type
+        if (type === 'MESSAGE') {
+          setTimeout(() => continueAgent(), 500);
+        }
+
+        // Check if done
+        if (done || type === 'DONE') {
+          resetAgent();
+        }
+
+      } catch (err) {
+        addMessage(`Agent Error: ${err.message}`, 'error');
+        resetAgent();
+      }
+    }
+
+    function showAgentUI(parsed, step) {
+      agentPanel.classList.add('active');
+      agentStep.textContent = `Step ${step}/100`;
+
+      const { type, content, command, question, required } = parsed;
+
+      if (type === 'CMD') {
+        agentType.textContent = 'Command';
+        agentContentEl.innerHTML = `<div class="agent-command">${escapeHtml(command)}</div>`;
+        agentStatusEl.textContent = 'Waiting for command execution';
+        agentInputArea.style.display = 'none';
+        agentActions.innerHTML = `
+          <button class="btn-execute" onclick="executeCommand()">Execute</button>
+          <button class="btn-skip" onclick="skipCommand()">Skip</button>
+          <button class="btn-cancel" onclick="cancelAgent()">Cancel</button>
+        `;
+        addMessage(`[CMD] ${command}`, 'agent-cmd');
+
+      } else if (type === 'ASK') {
+        agentType.textContent = required ? 'Question (required)' : 'Question (optional)';
+        agentContentEl.innerHTML = `<div class="agent-question">${escapeHtml(question || content)}</div>`;
+        agentStatusEl.textContent = 'Waiting for your answer';
+        agentInputArea.style.display = 'block';
+        agentInputEl.value = '';
+        agentInputEl.placeholder = required ? 'Your answer...' : 'Your answer (press Enter to skip)...';
+        agentInputEl.focus();
+        agentActions.innerHTML = `
+          <button class="btn-execute" onclick="submitAnswer()">Send</button>
+          <button class="btn-cancel" onclick="cancelAgent()">Cancel</button>
+        `;
+        addMessage(`[ASK] ${question || content}`, 'agent');
+
+      } else if (type === 'MESSAGE') {
+        agentType.textContent = 'Info';
+        agentContentEl.innerHTML = `<div class="agent-message">${escapeHtml(content)}</div>`;
+        agentStatusEl.textContent = 'Continuing...';
+        agentInputArea.style.display = 'none';
+        agentActions.innerHTML = `
+          <button class="btn-continue" onclick="continueAgent()">Continue</button>
+          <button class="btn-cancel" onclick="cancelAgent()">Cancel</button>
+        `;
+        addMessage(`[INFO] ${content}`, 'agent');
+
+      } else if (type === 'DONE') {
+        agentType.textContent = 'Completed';
+        agentContentEl.innerHTML = `<div class="agent-message">${escapeHtml(content)}</div>`;
+        agentStatusEl.textContent = 'Agent finished';
+        agentInputArea.style.display = 'none';
+        agentActions.innerHTML = `
+          <button class="btn-skip" onclick="closeAgentPanel()">Close</button>
+        `;
+        addMessage(`[DONE] ${content}`, 'agent');
+      }
+    }
+
+    async function executeCommand() {
+      if (!agentSession || agentState !== 'waiting_cmd') return;
+
+      const cmdEl = agentContentEl.querySelector('.agent-command');
+      const command = cmdEl ? cmdEl.textContent : '';
+      agentStatusEl.textContent = 'Executing command...';
+      agentActions.innerHTML = '<span style="color:#888">Executing...</span>';
+
+      try {
+        // Execute command locally (actual execution now)
+        let stdout = '';
+        let stderr = '';
+        let exitCode = 0;
+
+        try {
+          const runRes = await fetch(`/api/agent/${agentSession}/execute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command })
+          });
+          const runData = await runRes.json();
+          if (runData.success) {
+            stdout = runData.data.stdout;
+            stderr = runData.data.stderr;
+            exitCode = runData.data.exitCode;
+          } else {
+            stdout = `Execution Error: ${runData.error}`;
+          }
+        } catch (execErr) {
+          stdout = `Network Error: ${execErr.message}`;
+        }
+
+        // Send results back to agent
+        const res = await fetch(`/api/agent/${agentSession}/command-result`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stdout, stderr, exitCode })
+        });
+        const data = await res.json();
+
+        if (!data.success) {
+          addMessage(`Agent Error: ${data.error}`, 'error');
+          resetAgent();
+          return;
+        }
+
+        // Add user content to messages and send to AI
+        agentMessages.push({ role: 'user', content: data.data.userContent });
+        await sendToAIChat(agentMessages);
+
+      } catch (err) {
+        addMessage(`Agent Error: ${err.message}`, 'error');
+        resetAgent();
+      }
+    }
+
+    async function skipCommand() {
+      if (!agentSession || agentState !== 'waiting_cmd') return;
+
+      agentStatusEl.textContent = 'Skipping...';
+
+      try {
+        const res = await fetch(`/api/agent/${agentSession}/command-result`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ skipped: true })
+        });
+        const data = await res.json();
+
+        if (!data.success) {
+          addMessage(`Agent Error: ${data.error}`, 'error');
+          resetAgent();
+          return;
+        }
+
+        agentMessages.push({ role: 'user', content: data.data.userContent });
+        await sendToAIChat(agentMessages);
+
+      } catch (err) {
+        addMessage(`Agent Error: ${err.message}`, 'error');
+        resetAgent();
+      }
+    }
+
+    async function submitAnswer() {
+      if (!agentSession || agentState !== 'waiting_user') return;
+
+      const answer = agentInputEl.value.trim();
+      agentStatusEl.textContent = 'Sending answer...';
+
+      try {
+        const res = await fetch(`/api/agent/${agentSession}/message`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userMessage: answer || '(skipped)' })
+        });
+        const data = await res.json();
+
+        if (!data.success) {
+          addMessage(`Agent Error: ${data.error}`, 'error');
+          resetAgent();
+          return;
+        }
+
+        agentMessages.push({ role: 'user', content: data.data.userContent });
+        await sendToAIChat(agentMessages);
+
+      } catch (err) {
+        addMessage(`Agent Error: ${err.message}`, 'error');
+        resetAgent();
+      }
+    }
+
+    async function continueAgent() {
+      if (!agentSession) return;
+
+      agentStatusEl.textContent = 'Continuing...';
+
+      try {
+        const res = await fetch(`/api/agent/${agentSession}/continue`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}'
+        });
+        const data = await res.json();
+
+        if (!data.success) {
+          addMessage(`Agent Error: ${data.error}`, 'error');
+          resetAgent();
+          return;
+        }
+
+        agentMessages.push({ role: 'user', content: data.data.userContent });
+        await sendToAIChat(agentMessages);
+
+      } catch (err) {
+        addMessage(`Agent Error: ${err.message}`, 'error');
+        resetAgent();
+      }
+    }
+
+    async function cancelAgent() {
+      if (agentSession) {
+        try {
+          await fetch(`/api/agent/${agentSession}`, { method: 'DELETE' });
+        } catch {}
+      }
+      addMessage('Agent cancelled', 'system');
+      resetAgent();
+    }
+
+    function resetAgent() {
+      agentSession = null;
+      agentState = 'idle';
+      agentMessages = [];
+      agentStepNum = 1;
+      closeAgentPanel();
+    }
+
+    function closeAgentPanel() {
+      agentPanel.classList.remove('active');
+    }
+
+    // Handle Enter in agent input
+    agentInputEl?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        submitAnswer();
+      }
+    });
   </script>
 </body>
 </html>

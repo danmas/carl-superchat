@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import crypto from 'node:crypto';
+import { handleAgentRoute } from './terminal-agent.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3010;
@@ -16,9 +17,9 @@ const sseClients = new Map();
 
 // ── HTTP Server ──────────────────────────────────────────────────────
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') {
@@ -43,6 +44,12 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/open' && req.method === 'POST') {
     return handleOpen(req, res);
+  }
+
+  // Terminal Agent API
+  if (url.pathname.startsWith('/api/agent')) {
+    const handled = await handleAgentRoute(req, res, url.pathname);
+    if (handled !== false) return;
   }
 
   // Static files
