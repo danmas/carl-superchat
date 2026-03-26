@@ -216,10 +216,15 @@ export function parseAgentResponse(aiContent) {
     return { type: 'DELETE_MEMORY', filename: `MEMORY_${deleteMatch[1]}.md` };
   }
 
-  // GET-FILE
-  const getFileMatch = content.match(/^\[GET-FILE\]\s*(.+?)$/ims);
-  if (getFileMatch) {
-    return { type: 'GET-FILE', path: getFileMatch[1].trim() };
+  // GET-FILE (single or multiple)
+  const getFileMatches = [...content.matchAll(/^\[GET-FILE\]\s*(.+?)$/gim)];
+  if (getFileMatches.length > 0) {
+    const paths = getFileMatches.map(m => m[1].trim());
+    if (paths.length === 1) {
+      return { type: 'GET-FILE', path: paths[0] };
+    }
+    // Multiple GET-FILE directives
+    return { type: 'GET-FILES', paths };
   }
 
   // Fallback: treat first line as command

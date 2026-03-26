@@ -200,6 +200,7 @@ export async function handleAgentRoute(req, res, pathname) {
   if (aiResponseMatch && req.method === 'POST') {
     const sessionId = aiResponseMatch[1];
     const session = agentSessions[sessionId];
+    console.log('[agent] ai-response for session:', sessionId, 'exists:', !!session);
 
     if (!session) {
       return jsonResponse(res, 404, { success: false, error: 'Session not found' });
@@ -208,16 +209,27 @@ export async function handleAgentRoute(req, res, pathname) {
     try {
       const body = await readBody(req);
       const { aiContent } = body;
+      console.log('[agent] AI content preview:', aiContent?.substring(0, 100));
 
       // Parse AI response
       const parsed = parseAgentResponse(aiContent);
+      console.log('[agent] Parsed directive:', parsed.type);
 
       // Handle memory/GET-FILE instantly on server
-      if (['STORE', 'RETRIEVE', 'LIST_MEMORY', 'APPEND_MEMORY', 'DELETE_MEMORY', 'GET-FILE'].includes(parsed.type)) {
+      if (['STORE', 'RETRIEVE', 'LIST_MEMORY', 'APPEND_MEMORY', 'DELETE_MEMORY', 'GET-FILE', 'GET-FILES'].includes(parsed.type)) {
         let result;
 
         if (parsed.type === 'GET-FILE') {
           result = await handleGetFile(parsed.path);
+        } else if (parsed.type === 'GET-FILES') {
+          // Handle multiple GET-FILE directives
+          const results = await Promise.all(
+            parsed.paths.map(async (filePath) => {
+              const content = await handleGetFile(filePath);
+              return `--- ${filePath} ---\n${content}`;
+            })
+          );
+          result = results.join('\n\n');
         } else {
           result = await handleMemoryAction(parsed.type, parsed.filename, parsed.content);
           if (parsed.type === 'LIST_MEMORY' && result) {
@@ -287,6 +299,7 @@ export async function handleAgentRoute(req, res, pathname) {
   if (cmdResultMatch && req.method === 'POST') {
     const sessionId = cmdResultMatch[1];
     const session = agentSessions[sessionId];
+    console.log('[agent] command-result for session:', sessionId, 'exists:', !!session);
 
     if (!session) {
       return jsonResponse(res, 404, { success: false, error: 'Session not found' });
@@ -295,6 +308,7 @@ export async function handleAgentRoute(req, res, pathname) {
     try {
       const body = await readBody(req);
       const { stdout, stderr, exitCode, skipped = false } = body;
+      console.log('[agent] Command result - skipped:', skipped, 'exitCode:', exitCode, 'stdout length:', stdout?.length);
 
       session.step++;
       if (session.step > session.maxSteps) {
@@ -362,16 +376,31 @@ export async function handleAgentRoute(req, res, pathname) {
           cwd: path.resolve(__dirname, '..')
         });
 
+        // Truncate output if too large (max 5KB for AI context)
+        const MAX_OUTPUT = 5 * 1024;
+        const truncatedStdout = stdout.length > MAX_OUTPUT 
+          ? stdout.substring(0, MAX_OUTPUT) + `\n\n[OUTPUT TRUNCATED: ${Math.round(stdout.length / 1024)}KB total, showing first 5KB]`
+          : stdout;
+        const truncatedStderr = stderr.length > MAX_OUTPUT
+          ? stderr.substring(0, MAX_OUTPUT) + `\n\n[OUTPUT TRUNCATED]`
+          : stderr;
+
+        console.log('[agent] Command output length:', stdout.length, 'truncated to:', truncatedStdout.length);
+
         return jsonResponse(res, 200, {
           success: true,
-          data: { stdout, stderr, exitCode: 0 }
+          data: { stdout: truncatedStdout, stderr: truncatedStderr, exitCode: 0 }
         });
       } catch (execErr) {
+        const errStdout = execErr.stdout || '';
+        const errStderr = execErr.stderr || execErr.message;
+        const MAX_OUTPUT = 5 * 1024;
+        
         return jsonResponse(res, 200, {
           success: true, // Still success in terms of API, but command returned error
           data: {
-            stdout: execErr.stdout || '',
-            stderr: execErr.stderr || execErr.message,
+            stdout: errStdout.length > MAX_OUTPUT ? errStdout.substring(0, MAX_OUTPUT) + '\n[TRUNCATED]' : errStdout,
+            stderr: errStderr.length > MAX_OUTPUT ? errStderr.substring(0, MAX_OUTPUT) + '\n[TRUNCATED]' : errStderr,
             exitCode: execErr.code || 1
           }
         });

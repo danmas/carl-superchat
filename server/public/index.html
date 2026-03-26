@@ -142,6 +142,98 @@
   </div>
 
   <script>
+    // ═══════════════════════════════════════════════════════════════════
+    // Client Logging - Send console logs to server
+    // ═══════════════════════════════════════════════════════════════════
+    (function() {
+      const originalLog = console.log;
+      const originalWarn = console.warn;
+      const originalError = console.error;
+      
+      // Queue for batching logs
+      let logQueue = [];
+      let flushTimeout = null;
+      
+      function sendLogToServer(level, args) {
+        const message = args.map(arg => {
+          if (arg instanceof Error) {
+            return arg.stack || arg.message;
+          }
+          if (typeof arg === 'object') {
+            try {
+              return JSON.stringify(arg);
+            } catch (e) {
+              return String(arg);
+            }
+          }
+          return String(arg);
+        }).join(' ');
+        
+        logQueue.push({
+          level: level,
+          context: 'TEST-UI',
+          message: message,
+          data: null
+        });
+        
+        // Flush queue periodically or immediately for errors
+        if (level === 'ERROR') {
+          flushLogs();
+        } else if (!flushTimeout) {
+          flushTimeout = setTimeout(flushLogs, 500);
+        }
+      }
+      
+      async function flushLogs() {
+        if (logQueue.length === 0) return;
+        
+        const logsToSend = logQueue.slice();
+        logQueue = [];
+        flushTimeout = null;
+        
+        // Send logs in parallel
+        for (const log of logsToSend) {
+          try {
+            fetch('/api/logs', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(log)
+            }).catch(() => {}); // Ignore network errors
+          } catch (e) {
+            // Ignore errors
+          }
+        }
+      }
+      
+      // Override console methods
+      console.log = function(...args) {
+        originalLog.apply(console, args);
+        sendLogToServer('INFO', args);
+      };
+      
+      console.warn = function(...args) {
+        originalWarn.apply(console, args);
+        sendLogToServer('WARN', args);
+      };
+      
+      console.error = function(...args) {
+        originalError.apply(console, args);
+        sendLogToServer('ERROR', args);
+      };
+      
+      // Flush on page unload
+      window.addEventListener('beforeunload', flushLogs);
+      
+      // Also capture unhandled errors
+      window.addEventListener('error', (event) => {
+        console.error('Unhandled error:', event.error || event.message);
+      });
+      
+      window.addEventListener('unhandledrejection', (event) => {
+        console.error('Unhandled promise rejection:', event.reason);
+      });
+    })();
+
     if (typeof marked !== 'undefined') {
       marked.setOptions({ breaks: true, gfm: true });
     }
@@ -417,17 +509,20 @@
     let agentStepNum = 1;
 
     async function startTerminalAgent(userPrompt) {
+      console.log('[T-Executor] Starting with prompt:', userPrompt);
       addMessage(`ta: ${userPrompt}`, 'user');
       addMessage('🤖 Starting Terminal Agent...', 'agent');
 
       try {
         // 1. Create session on server (get system prompt)
+        console.log('[T-Executor] Creating session...');
         const res = await fetch('/api/agent/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ mode: 'standalone', prompt: userPrompt })
         });
         const data = await res.json();
+        console.log('[T-Executor] Session created:', data);
 
         if (!data.success) {
           addMessage(`Agent Error: ${data.error}`, 'error');
@@ -437,17 +532,21 @@
         agentSession = data.data.sessionId;
         agentMessages = data.data.messages;
         agentStepNum = 1;
+        console.log('[T-Executor] Session ID:', agentSession);
 
         // 2. Send to AI via Extension (first message = full context)
+        console.log('[T-Executor] Sending to AI chat...');
         await sendToAIChat(agentMessages, true);
 
       } catch (err) {
+        console.error('[T-Executor] startTerminalAgent error:', err);
         addMessage(`Agent Error: ${err.message}`, 'error');
         resetAgent();
       }
     }
 
     async function sendToAIChat(messages, isFirstMessage = false) {
+      console.log('[T-Executor] sendToAIChat called, isFirstMessage:', isFirstMessage, 'messages:', messages.length);
       const site = siteSelect.value;
       const stream = streamToggle.checked;
 
@@ -474,6 +573,7 @@
         return;
       }
 
+      console.log('[T-Executor] Sending to /api/send, site:', site, 'stream:', stream);
       addMessage('⏳ Waiting for AI response...', 'system');
 
       try {
@@ -482,9 +582,11 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ site, message: messageToSend, stream })
         });
+        console.log('[T-Executor] /api/send response status:', res.status);
 
         if (!res.ok) {
           const err = await res.text();
+          console.error('[T-Executor] /api/send error:', err);
           addMessage(`AI Error: ${err}`, 'error');
           resetAgent();
           return;
@@ -493,6 +595,7 @@
         let aiResponse = '';
 
         if (stream) {
+          console.log('[T-Executor] Reading stream...');
           const reader = res.body.getReader();
           const decoder = new TextDecoder();
           let buffer = '';
@@ -514,6 +617,7 @@
                 } else if (data.done) {
                   aiResponse = data.fullText;
                 } else if (data.error) {
+                  console.error('[T-Executor] Stream error:', data.error);
                   addMessage(`AI Error: ${data.error}`, 'error');
                   resetAgent();
                   return;
@@ -523,43 +627,55 @@
           }
         } else {
           const data = await res.json();
+          console.log('[T-Executor] Non-stream response:', data);
           if (data.ok) {
             aiResponse = data.fullText;
           } else {
+            console.error('[T-Executor] AI error:', data.error);
             addMessage(`AI Error: ${data.error}`, 'error');
             resetAgent();
             return;
           }
         }
 
+        console.log('[T-Executor] AI response received, length:', aiResponse.length);
         // Process AI response
         await processAIResponse(aiResponse);
 
       } catch (err) {
+        console.error('[T-Executor] sendToAIChat error:', err);
         addMessage(`Network Error: ${err.message}`, 'error');
         resetAgent();
       }
     }
 
     async function processAIResponse(aiContent) {
-      if (!agentSession) return;
+      console.log('[T-Executor] processAIResponse called, content preview:', aiContent.substring(0, 100));
+      if (!agentSession) {
+        console.warn('[T-Executor] No agent session, aborting');
+        return;
+      }
 
       try {
         // Send AI response to server for parsing
+        console.log('[T-Executor] Parsing AI response on server...');
         const res = await fetch(`/api/agent/${agentSession}/ai-response`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ aiContent })
         });
         const data = await res.json();
+        console.log('[T-Executor] Parse result:', data);
 
         if (!data.success) {
+          console.error('[T-Executor] Parse error:', data.error);
           addMessage(`Agent Error: ${data.error}`, 'error');
           resetAgent();
           return;
         }
 
         const { type, handled, parsed, result, userContent, step, state, done } = data.data;
+        console.log('[T-Executor] Directive type:', type, 'handled:', handled, 'state:', state);
 
         // Update state
         agentState = state || 'idle';
@@ -567,6 +683,7 @@
 
         // If server handled it (memory/GET-FILE), send result back to AI
         if (handled) {
+          console.log('[T-Executor] Server handled directive, result:', result?.substring(0, 50));
           addMessage(`[${type}] ${result.substring(0, 100)}${result.length > 100 ? '...' : ''}`, 'agent');
           
           // Add result to messages and send to AI
@@ -578,6 +695,7 @@
         }
 
         // Show in Agent UI
+        console.log('[T-Executor] Showing Agent UI for:', type);
         showAgentUI(parsed, step);
 
         // Add AI message to history
@@ -585,15 +703,18 @@
 
         // Auto-continue for MESSAGE type
         if (type === 'MESSAGE') {
+          console.log('[T-Executor] MESSAGE type, auto-continuing...');
           setTimeout(() => continueAgent(), 500);
         }
 
         // Check if done
         if (done || type === 'DONE') {
+          console.log('[T-Executor] Task completed');
           resetAgent();
         }
 
       } catch (err) {
+        console.error('[T-Executor] processAIResponse error:', err);
         addMessage(`Agent Error: ${err.message}`, 'error');
         resetAgent();
       }
@@ -655,10 +776,12 @@
     }
 
     async function executeCommand() {
+      console.log('[T-Executor] executeCommand called, session:', agentSession, 'state:', agentState);
       if (!agentSession || agentState !== 'waiting_cmd') return;
 
       const cmdEl = agentContentEl.querySelector('.agent-command');
       const command = cmdEl ? cmdEl.textContent : '';
+      console.log('[T-Executor] Executing command:', command);
       agentStatusEl.textContent = 'Executing command...';
       agentActions.innerHTML = '<span style="color:#888">Executing...</span>';
 
@@ -675,6 +798,7 @@
             body: JSON.stringify({ command })
           });
           const runData = await runRes.json();
+          console.log('[T-Executor] Execute result:', runData);
           if (runData.success) {
             stdout = runData.data.stdout;
             stderr = runData.data.stderr;
@@ -683,28 +807,34 @@
             stdout = `Execution Error: ${runData.error}`;
           }
         } catch (execErr) {
+          console.error('[T-Executor] Execute fetch error:', execErr);
           stdout = `Network Error: ${execErr.message}`;
         }
 
         // Send results back to agent
+        console.log('[T-Executor] Sending command result to server...');
         const res = await fetch(`/api/agent/${agentSession}/command-result`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ stdout, stderr, exitCode })
         });
         const data = await res.json();
+        console.log('[T-Executor] Command result response:', data);
 
         if (!data.success) {
+          console.error('[T-Executor] Command result error:', data.error);
           addMessage(`Agent Error: ${data.error}`, 'error');
           resetAgent();
           return;
         }
 
         // Add user content to messages and send to AI
+        console.log('[T-Executor] Adding user content and sending to AI...');
         agentMessages.push({ role: 'user', content: data.data.userContent });
         await sendToAIChat(agentMessages);
 
       } catch (err) {
+        console.error('[T-Executor] executeCommand error:', err);
         addMessage(`Agent Error: ${err.message}`, 'error');
         resetAgent();
       }

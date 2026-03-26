@@ -5,9 +5,15 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import crypto from 'node:crypto';
 import { handleAgentRoute } from './terminal-agent.js';
+import { interceptConsole, writeClientLog, createLogger } from './lib/logger.js';
+
+// Initialize logging - intercept console methods
+interceptConsole();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3010;
+
+const logger = createLogger('SERVER');
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -52,6 +58,11 @@ const server = http.createServer(async (req, res) => {
     if (handled !== false) return;
   }
 
+  // Client logging endpoint (from browser UI)
+  if (url.pathname === '/api/logs' && req.method === 'POST') {
+    return handleClientLogs(req, res);
+  }
+
   // Static files
   serveStatic(req, res, url.pathname);
 });
@@ -94,8 +105,16 @@ function handleExtensionMessage(msg) {
     return;
   }
 
+  // Log all non-heartbeat messages for debugging
+  if (type !== 'chunk') {
+    console.log(`[WS] Received: type=${type}, id=${id}, site=${msg.site || 'N/A'}${msg.error ? ', error=' + msg.error : ''}`);
+  }
+
   const pending = id ? pendingRequests.get(id) : null;
-  if (!pending) return;
+  if (!pending) {
+    if (id) console.warn(`[WS] No pending request for id=${id}, type=${type}`);
+    return;
+  }
 
   switch (type) {
     case 'sent':
@@ -129,6 +148,7 @@ function handleExtensionMessage(msg) {
       break;
 
     case 'error':
+      console.error(`[WS] Error from extension: id=${id}, site=${msg.site || 'N/A'}, error=${msg.error}`);
       if (pending.sseClientId) {
         const sseRes = sseClients.get(pending.sseClientId);
         if (sseRes && !sseRes.writableEnded) {
@@ -209,6 +229,9 @@ function handleSend(req, res) {
     const timeout = hasFiles ? 180000 : 120000;
     const id = uid();
 
+    // Log send command
+    console.log(`[API] /api/send: id=${id}, site=${site}, msgLen=${message?.length || 0}, files=${files?.length || 0}, stream=${shouldStream}`);
+
     if (shouldStream) {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -278,6 +301,23 @@ function timeoutRequest(id) {
     jsonResponse(p.res, 504, { ok: false, error: 'Timeout waiting for response' });
   }
   pendingRequests.delete(id);
+}
+
+// ── Client Logging Handler ───────────────────────────────────────────
+
+function handleClientLogs(req, res) {
+  readBody(req).then((body) => {
+    const { level, context, message, data } = body;
+    
+    if (!message) {
+      return jsonResponse(res, 400, { ok: false, error: 'message is required' });
+    }
+    
+    writeClientLog(level || 'INFO', context || 'CLIENT', message, data);
+    jsonResponse(res, 200, { ok: true });
+  }).catch((err) => {
+    jsonResponse(res, 400, { ok: false, error: `Invalid JSON: ${err.message}` });
+  });
 }
 
 // ── Utilities ────────────────────────────────────────────────────────

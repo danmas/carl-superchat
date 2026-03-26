@@ -602,37 +602,68 @@ if (adapter) {
 }
 
 async function handleSendCommand(cmd: { id: string; message: string; stream?: boolean; files?: FileData[] }) {
-  if (!adapter) return;
+  if (!adapter) {
+    console.error('[carl-superchat] handleSendCommand: No adapter available');
+    return;
+  }
 
   const stream = cmd.stream ?? true;
+  const msgPreview = cmd.message.substring(0, 100) + (cmd.message.length > 100 ? '...' : '');
+  
+  console.log(`[carl-superchat] handleSendCommand: site=${adapter.name}, id=${cmd.id}, msgLen=${cmd.message.length}, files=${cmd.files?.length || 0}, stream=${stream}`);
 
   if (cmd.files?.length) {
+    console.log(`[carl-superchat] Attaching ${cmd.files.length} files...`);
     try {
       const ok = await attachFiles(adapter.name, cmd.files);
       if (!ok) {
-        chrome.runtime.sendMessage({ type: 'bridge:error', id: cmd.id, site: adapter.name, error: 'Failed to attach files' });
+        const error = `Failed to attach files: site=${adapter.name}, fileCount=${cmd.files.length}`;
+        console.error(`[carl-superchat] ${error}`);
+        chrome.runtime.sendMessage({ type: 'bridge:error', id: cmd.id, site: adapter.name, error });
         return;
       }
+      console.log(`[carl-superchat] Files attached, waiting for upload...`);
       await waitForFileUpload(adapter.name);
+      console.log(`[carl-superchat] File upload complete`);
     } catch (err: any) {
-      chrome.runtime.sendMessage({ type: 'bridge:error', id: cmd.id, site: adapter.name, error: `File attach error: ${err.message}` });
+      const error = `File attach error: site=${adapter.name}, err=${err.message}`;
+      console.error(`[carl-superchat] ${error}`);
+      chrome.runtime.sendMessage({ type: 'bridge:error', id: cmd.id, site: adapter.name, error });
       return;
     }
   }
 
+  console.log(`[carl-superchat] Inserting text (${cmd.message.length} chars)...`);
   const inserted = await adapter.insertText(cmd.message);
   if (!inserted) {
-    chrome.runtime.sendMessage({ type: 'bridge:error', id: cmd.id, site: adapter.name, error: 'Failed to insert text' });
+    // Collect diagnostic info - try common selectors
+    const inputEl = document.querySelector('textarea, [contenteditable="true"], input[type="text"]');
+    const inputFound = !!inputEl;
+    const inputVisible = inputEl ? (inputEl as HTMLElement).offsetParent !== null : false;
+    const inputDisabled = inputEl ? (inputEl as HTMLInputElement).disabled : false;
+    
+    const error = `Failed to insert text: site=${adapter.name}, inputFound=${inputFound}, inputVisible=${inputVisible}, inputDisabled=${inputDisabled}, msgLen=${cmd.message.length}`;
+    console.error(`[carl-superchat] ${error}`);
+    chrome.runtime.sendMessage({ type: 'bridge:error', id: cmd.id, site: adapter.name, error });
     return;
   }
+  console.log(`[carl-superchat] Text inserted successfully`);
 
   await sleep(adapter.name === 'gemini' ? 500 : 200);
 
+  console.log(`[carl-superchat] Submitting...`);
   const submitted = await adapter.submit();
   if (!submitted) {
-    chrome.runtime.sendMessage({ type: 'bridge:error', id: cmd.id, site: adapter.name, error: 'Failed to submit' });
+    const submitBtn = document.querySelector('button[type="submit"], button[aria-label*="send"], button[aria-label*="Send"]');
+    const btnFound = !!submitBtn;
+    const btnDisabled = submitBtn ? (submitBtn as HTMLButtonElement).disabled : false;
+    
+    const error = `Failed to submit: site=${adapter.name}, btnFound=${btnFound}, btnDisabled=${btnDisabled}`;
+    console.error(`[carl-superchat] ${error}`);
+    chrome.runtime.sendMessage({ type: 'bridge:error', id: cmd.id, site: adapter.name, error });
     return;
   }
+  console.log(`[carl-superchat] Submitted successfully`);
 
   chrome.runtime.sendMessage({ type: 'bridge:sent', id: cmd.id, site: adapter.name });
 

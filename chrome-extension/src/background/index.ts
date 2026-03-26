@@ -159,6 +159,8 @@ function stopKeepAlive() {
 async function routeToTab(cmdId: string, site: string, message: any) {
   let tab = findTabBySite(site);
 
+  logger.debug(`routeToTab: cmdId=${cmdId}, site=${site}, type=${message.type}, tabFound=${!!tab}`);
+
   if (!tab) {
     const url = SITE_URLS[site];
     if (!url) {
@@ -188,13 +190,15 @@ async function routeToTab(cmdId: string, site: string, message: any) {
     logger.debug(`Auto-opened tab ${tab.tabId} for ${site}`);
   }
 
+  logger.debug(`Sending message to tab ${tab.tabId}: type=${message.type}, id=${cmdId}`);
+
   if (message.type === 'bridge:send') {
     activeRequestTabs.add(tab.tabId);
     startKeepAlive();
   }
 
   chrome.tabs.sendMessage(tab.tabId, message).catch((err) => {
-    logger.error(`Failed to send to tab ${tab!.tabId}:`, err);
+    logger.error(`Failed to send to tab ${tab!.tabId}: ${err.message}`);
     sendToServer({ id: cmdId, type: 'error', site, error: `Tab communication failed: ${err.message}` });
     activeRequestTabs.delete(tab!.tabId);
     if (activeRequestTabs.size === 0) stopKeepAlive();
@@ -304,6 +308,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     case 'bridge:error': {
+      logger.error(`Error from content script: tabId=${tabId}, site=${message.site}, error=${message.error}`);
       sendToServer({
         id: message.id,
         type: 'error',
