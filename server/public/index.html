@@ -77,6 +77,8 @@
     #agent-panel .agent-content { background: #111; border-radius: 6px; padding: 12px; margin-bottom: 10px; }
     #agent-panel .agent-type { font-size: 11px; color: #888; text-transform: uppercase; margin-bottom: 4px; }
     #agent-panel .agent-command { font-family: 'Consolas', 'Fira Code', monospace; font-size: 13px; color: #60a5fa; white-space: pre-wrap; word-break: break-all; }
+    #agent-panel .agent-command-edit { width: 100%; resize: vertical; background: #1e293b; color: #60a5fa; border: 1px solid #334155; border-radius: 6px; padding: 10px; font-family: 'Consolas', 'Fira Code', monospace; font-size: 13px; min-height: 40px; box-sizing: border-box; }
+    #agent-panel .agent-command-edit:focus { outline: none; border-color: #60a5fa; box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.2); }
     #agent-panel .agent-question { font-size: 14px; color: #e0e0e0; white-space: pre-wrap; }
     #agent-panel .agent-message { font-size: 14px; color: #aaa; white-space: pre-wrap; }
     #agent-panel .agent-actions { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -728,8 +730,8 @@
 
       if (type === 'CMD') {
         agentType.textContent = 'Command';
-        agentContentEl.innerHTML = `<div class="agent-command">${escapeHtml(command)}</div>`;
-        agentStatusEl.textContent = 'Waiting for command execution';
+        agentContentEl.innerHTML = `<textarea class="agent-command-edit" id="agent-command-input" rows="2" spellcheck="false">${escapeHtml(command)}</textarea>`;
+        agentStatusEl.textContent = 'Edit command if needed, then Execute';
         agentInputArea.style.display = 'none';
         agentActions.innerHTML = `
           <button class="btn-execute" onclick="executeCommand()">Execute</button>
@@ -779,8 +781,8 @@
       console.log('[T-Executor] executeCommand called, session:', agentSession, 'state:', agentState);
       if (!agentSession || agentState !== 'waiting_cmd') return;
 
-      const cmdEl = agentContentEl.querySelector('.agent-command');
-      const command = cmdEl ? cmdEl.textContent : '';
+      const cmdInput = document.getElementById('agent-command-input');
+      const command = cmdInput ? cmdInput.value.trim() : '';
       console.log('[T-Executor] Executing command:', command);
       agentStatusEl.textContent = 'Executing command...';
       agentActions.innerHTML = '<span style="color:#888">Executing...</span>';
