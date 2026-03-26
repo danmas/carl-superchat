@@ -249,6 +249,47 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * Wait for chat input to be ready (visible and not disabled)
+ * Protection against race condition when page is still loading
+ */
+async function waitForInputReady(siteName: string, timeout = 10000): Promise<boolean> {
+  const startTime = Date.now();
+  const checkInterval = 200;
+  
+  // Site-specific selectors
+  const inputSelectors: Record<string, string> = {
+    grok: 'textarea[placeholder*="Ask"], textarea[data-testid], textarea[class*="input"], div[contenteditable="true"]',
+    gemini: 'div.ql-editor[contenteditable="true"], div[contenteditable="true"][aria-label], div.textarea',
+    qwen: 'textarea.message-input-textarea, #chat-input, textarea.chat-input',
+  };
+  
+  const selector = inputSelectors[siteName] || 'textarea, [contenteditable="true"], input[type="text"]';
+  
+  while (Date.now() - startTime < timeout) {
+    const el = document.querySelector(selector) as HTMLElement | null;
+    
+    if (el) {
+      const isVisible = el.offsetParent !== null || el.getBoundingClientRect().width > 0;
+      const isDisabled = (el as HTMLInputElement).disabled === true;
+      const isReadonly = el.hasAttribute('readonly');
+      
+      if (isVisible && !isDisabled && !isReadonly) {
+        console.log(`[carl-superchat] waitForInputReady: found input after ${Date.now() - startTime}ms`);
+        return true;
+      }
+      console.log(`[carl-superchat] waitForInputReady: input found but not ready (visible=${isVisible}, disabled=${isDisabled}, readonly=${isReadonly})`);
+    } else {
+      console.log(`[carl-superchat] waitForInputReady: input not found yet, selector=${selector}`);
+    }
+    
+    await sleep(checkInterval);
+  }
+  
+  console.error(`[carl-superchat] waitForInputReady: timeout after ${timeout}ms`);
+  return false;
+}
+
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const raw = atob(base64);
   const arr = new Uint8Array(raw.length);
@@ -604,6 +645,7 @@ if (adapter) {
 async function handleSendCommand(cmd: { id: string; message: string; stream?: boolean; files?: FileData[] }) {
   if (!adapter) {
     console.error('[carl-superchat] handleSendCommand: No adapter available');
+    chrome.runtime.sendMessage({ type: 'bridge:error', id: cmd.id, site: 'unknown', error: 'No adapter available' });
     return;
   }
 
@@ -611,6 +653,16 @@ async function handleSendCommand(cmd: { id: string; message: string; stream?: bo
   const msgPreview = cmd.message.substring(0, 100) + (cmd.message.length > 100 ? '...' : '');
   
   console.log(`[carl-superchat] handleSendCommand: site=${adapter.name}, id=${cmd.id}, msgLen=${cmd.message.length}, files=${cmd.files?.length || 0}, stream=${stream}`);
+
+  // Wait for chat input to be ready (protection against race condition)
+  const inputReady = await waitForInputReady(adapter.name, 10000);
+  if (!inputReady) {
+    const error = `Timeout waiting for chat input: site=${adapter.name}, waited 10s`;
+    console.error(`[carl-superchat] ${error}`);
+    chrome.runtime.sendMessage({ type: 'bridge:error', id: cmd.id, site: adapter.name, error });
+    return;
+  }
+  console.log(`[carl-superchat] Chat input is ready`);
 
   if (cmd.files?.length) {
     console.log(`[carl-superchat] Attaching ${cmd.files.length} files...`);
@@ -634,15 +686,27 @@ async function handleSendCommand(cmd: { id: string; message: string; stream?: bo
   }
 
   console.log(`[carl-superchat] Inserting text (${cmd.message.length} chars)...`);
-  const inserted = await adapter.insertText(cmd.message);
-  if (!inserted) {
-    // Collect diagnostic info - try common selectors
+  
+  // Retry logic for insertText
+  let inserted = false;
+  let lastError = '';
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    inserted = await adapter.insertText(cmd.message);
+    if (inserted) break;
+    
+    // Collect diagnostic info
     const inputEl = document.querySelector('textarea, [contenteditable="true"], input[type="text"]');
     const inputFound = !!inputEl;
     const inputVisible = inputEl ? (inputEl as HTMLElement).offsetParent !== null : false;
     const inputDisabled = inputEl ? (inputEl as HTMLInputElement).disabled : false;
+    lastError = `attempt=${attempt}, inputFound=${inputFound}, inputVisible=${inputVisible}, inputDisabled=${inputDisabled}`;
     
-    const error = `Failed to insert text: site=${adapter.name}, inputFound=${inputFound}, inputVisible=${inputVisible}, inputDisabled=${inputDisabled}, msgLen=${cmd.message.length}`;
+    console.warn(`[carl-superchat] insertText failed (${lastError}), ${attempt < 3 ? 'retrying in 1s...' : 'giving up'}`);
+    if (attempt < 3) await sleep(1000);
+  }
+  
+  if (!inserted) {
+    const error = `Failed to insert text after 3 attempts: site=${adapter.name}, ${lastError}, msgLen=${cmd.message.length}`;
     console.error(`[carl-superchat] ${error}`);
     chrome.runtime.sendMessage({ type: 'bridge:error', id: cmd.id, site: adapter.name, error });
     return;
