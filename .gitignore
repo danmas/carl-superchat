@@ -13,6 +13,8 @@ chrome-extension/pre-build.tsconfig.tsbuildinfo
 eslint.config.js
 tsconfig.tsbuildinfo
 
+
+
 # env
 **/.env.*
 **/.env
@@ -55,7 +57,7 @@ node_modules/
 tasks.json
 tasks/ 
 
-
+docs/
 
 .windsurfrules
 ADAPTER_BUTTON_STYLING.md
