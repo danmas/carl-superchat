@@ -7,7 +7,7 @@ const manifest = {
   default_locale: 'en',
   name: 'carl-superchat',
   version: packageJson.version,
-  description: 'AI Chat Bridge — Grok, Gemini, Qwen',
+  description: 'AI Chat Bridge — Grok, Gemini, Qwen, Kimi, DeepSeek',
 
   host_permissions: [
     '*://*.grok.com/*',
@@ -22,6 +22,14 @@ const manifest = {
     '*://chat.qwen.ai/*',
     '*://*.qwen.ai/*',
     '*://qwen.ai/*',
+    '*://*.kimi.com/*',
+    '*://kimi.com/*',
+    '*://*.kimi.moonshot.cn/*',
+    '*://kimi.moonshot.cn/*',
+    '*://*.deepseek.com/*',
+    '*://deepseek.com/*',
+    '*://*.chat.deepseek.com/*',
+    '*://chat.deepseek.com/*',
   ],
 
   permissions: ['storage', 'tabs', 'scripting'],
@@ -61,6 +69,26 @@ const manifest = {
         '*://*.chat.qwen.ai/*',
         '*://qwen.ai/*',
         '*://*.qwen.ai/*',
+      ],
+      js: ['content/index.iife.js'],
+      run_at: 'document_idle' as const,
+    },
+    {
+      matches: [
+        '*://kimi.com/*',
+        '*://*.kimi.com/*',
+        '*://kimi.moonshot.cn/*',
+        '*://*.kimi.moonshot.cn/*',
+      ],
+      js: ['content/index.iife.js'],
+      run_at: 'document_idle' as const,
+    },
+    {
+      matches: [
+        '*://chat.deepseek.com/*',
+        '*://*.chat.deepseek.com/*',
+        '*://deepseek.com/*',
+        '*://*.deepseek.com/*',
       ],
       js: ['content/index.iife.js'],
       run_at: 'document_idle' as const,

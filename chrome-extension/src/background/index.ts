@@ -12,6 +12,8 @@ const SITE_URLS: Record<string, string> = {
   grok: 'https://grok.com/',
   gemini: 'https://gemini.google.com/app',
   qwen: 'https://chat.qwen.ai/',
+  kimi: 'https://kimi.com/',
+  deepseek: 'https://chat.deepseek.com/',
 };
 
 let ws: WebSocket | null = null;

@@ -147,7 +147,7 @@ const adapters: SiteAdapter[] = [
     isGenerating() {
       const stop = document.querySelector('button[class*="stop"], div[class*="stop-button"], div[class*="loading"], span[class*="loading"]');
       if (stop && stop.getBoundingClientRect().width > 0) return true;
-      const cursors = document.querySelectorAll('span.blinking-cursor, span[class*="cursor"], div[class*="typing"]');
+      const cursors = Array.from(document.querySelectorAll('span.blinking-cursor, span[class*="cursor"], div[class*="typing"]'));
       for (const c of cursors) { if (c.getBoundingClientRect().width > 0) return true; }
       return false;
     },
@@ -204,6 +204,233 @@ const adapters: SiteAdapter[] = [
       return true;
     },
   },
+
+  {
+    name: 'kimi',
+    hostMatch: (h) => h.includes('kimi.com') || h.includes('kimi.moonshot.cn'),
+    inputSelector: '.chat-input-editor[contenteditable="true"], div[contenteditable="true"][data-lexical-editor="true"], .chat-input-editor, textarea[placeholder*="Ask"]',
+    // Kimi uses .send-button-container as the clickable wrapper, .send-icon is just an SVG
+    submitSelector: '.send-button-container:not(.disabled), .chat-editor-action .send-button-container, button[class*="send"], div[class*="send-button"]',
+    // Kimi response structure: .segment-content .markdown-container .markdown
+    responseContainerSelector: '.segment-content .markdown, .markdown-container .markdown, .segment-content-box .markdown',
+
+    isGenerating() {
+      // Kimi shows loading indicator while generating
+      const stop = document.querySelector('.stop-button, .segment-loading, [class*="stop"], [class*="loading-indicator"]');
+      if (stop && stop.getBoundingClientRect().width > 0) return true;
+      // Check for typing cursor
+      const cursors = Array.from(document.querySelectorAll('.typing-cursor, .blinking-cursor, [class*="cursor"]'));
+      for (const c of cursors) { if (c.getBoundingClientRect().width > 0) return true; }
+      return false;
+    },
+
+    getLastResponseElement() {
+      // Kimi-specific selectors based on actual DOM structure
+      const kimiSelectors = [
+        '.segment-content .markdown',
+        '.segment-content-box .markdown',
+        '.markdown-container .markdown',
+        '.segment-content .paragraph',
+        '[class*="segment-content"] .markdown',
+        '[class*="segment-assistant"] .markdown',
+      ];
+      
+      for (const sel of kimiSelectors) {
+        const all = document.querySelectorAll(sel);
+        if (all.length) {
+          console.log(`[carl-superchat] Kimi: found response with selector ${sel}, count=${all.length}`);
+          return all[all.length - 1];
+        }
+      }
+      
+      // Generic fallback selectors
+      const fallbackSelectors = [
+        'div[class*="markdown-body"]',
+        'div[class*="assistant-message"]',
+        'div[class*="message-content"]',
+        'div.markdown-body',
+        'div[class*="prose"]',
+      ];
+      
+      for (const sel of fallbackSelectors) {
+        const all = document.querySelectorAll(sel);
+        if (all.length) return all[all.length - 1];
+      }
+      
+      return null;
+    },
+
+    async insertText(text: string) {
+      const el = findFirst(this.inputSelector) as HTMLElement | null;
+      if (!el) return false;
+      el.focus();
+
+      // Handle contenteditable elements (Kimi uses Lexical editor)
+      if (el.hasAttribute('contenteditable')) {
+        el.textContent = '';
+        document.execCommand('selectAll', false);
+        document.execCommand('insertText', false, text);
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      } else if (el.tagName === 'TEXTAREA') {
+        (el as HTMLTextAreaElement).value = text;
+        el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      return true;
+    },
+
+    async submit() {
+      // Try to find and click the send button container
+      const btn = findFirst(this.submitSelector) as HTMLElement | null;
+      
+      if (btn) {
+        // Check if it's disabled
+        const isDisabled = btn.classList.contains('disabled') || 
+                          btn.getAttribute('aria-disabled') === 'true' ||
+                          (btn as any).disabled;
+        
+        if (!isDisabled) {
+          console.log('[carl-superchat] Kimi: clicking send button container');
+          btn.click();
+          return true;
+        }
+      }
+      
+      // Fallback: try Enter key on input
+      const input = findFirst(this.inputSelector) as HTMLElement;
+      if (input) {
+        console.log('[carl-superchat] Kimi: using Enter key fallback');
+        input.focus();
+        
+        // Kimi may need specific keyboard events
+        const enterEvent = new KeyboardEvent('keydown', {
+          key: 'Enter',
+          code: 'Enter',
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        input.dispatchEvent(enterEvent);
+        
+        // Also try keyup
+        const keyupEvent = new KeyboardEvent('keyup', {
+          key: 'Enter',
+          code: 'Enter',
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+        });
+        input.dispatchEvent(keyupEvent);
+        
+        return true;
+      }
+      
+      return false;
+    },
+  },
+
+  {
+    name: 'deepseek',
+    hostMatch: (h) => h.includes('deepseek.com'),
+    inputSelector: 'textarea#chat-input, textarea[placeholder*="Message DeepSeek"], textarea[placeholder*="Send a message"], div[contenteditable="true"]',
+    submitSelector: 'button[data-testid="send-button"], button.ds-icon-button, div._7436101 button, button[aria-label*="Send"]',
+    // DeepSeek response structure
+    responseContainerSelector: '.ds-markdown, .markdown-body, div[class*="markdown"]',
+
+    isGenerating() {
+      // DeepSeek shows stop button while generating
+      const stop = document.querySelector('button[aria-label*="Stop"], div[class*="stop"], .stop-generating');
+      if (stop && stop.getBoundingClientRect().width > 0) return true;
+      // Check for loading indicators
+      const loading = document.querySelector('[class*="loading"], [class*="typing"], .regenerate-loading');
+      if (loading && loading.getBoundingClientRect().width > 0) return true;
+      return false;
+    },
+
+    getLastResponseElement() {
+      // DeepSeek-specific selectors
+      const deepseekSelectors = [
+        '.ds-markdown',
+        '.markdown-body',
+        'div[class*="_8de5354"]',  // DeepSeek hashed class for response
+        'div[class*="assistant"] .ds-markdown',
+        '[class*="message-content"] .ds-markdown',
+      ];
+      
+      for (const sel of deepseekSelectors) {
+        const all = document.querySelectorAll(sel);
+        if (all.length) {
+          console.log(`[carl-superchat] DeepSeek: found response with selector ${sel}, count=${all.length}`);
+          return all[all.length - 1];
+        }
+      }
+      
+      // Generic fallback
+      const fallback = document.querySelectorAll('div[class*="markdown"]');
+      if (fallback.length) return fallback[fallback.length - 1];
+      
+      return null;
+    },
+
+    async insertText(text: string) {
+      const el = findFirst(this.inputSelector) as HTMLElement | null;
+      if (!el) return false;
+      el.focus();
+
+      // DeepSeek uses textarea
+      if (el.tagName === 'TEXTAREA') {
+        const textarea = el as HTMLTextAreaElement;
+        textarea.value = text;
+        textarea.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
+        textarea.dispatchEvent(new Event('change', { bubbles: true }));
+      } else if (el.hasAttribute('contenteditable')) {
+        el.textContent = '';
+        document.execCommand('selectAll', false);
+        document.execCommand('insertText', false, text);
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
+      }
+      return true;
+    },
+
+    async submit() {
+      // Try to find and click the send button
+      const btn = findFirst(this.submitSelector) as HTMLElement | null;
+      
+      if (btn) {
+        const isDisabled = btn.classList.contains('disabled') || 
+                          btn.getAttribute('aria-disabled') === 'true' ||
+                          (btn as any).disabled;
+        
+        if (!isDisabled) {
+          console.log('[carl-superchat] DeepSeek: clicking send button');
+          btn.click();
+          return true;
+        }
+      }
+      
+      // Fallback: Enter key
+      const input = findFirst(this.inputSelector) as HTMLElement;
+      if (input) {
+        console.log('[carl-superchat] DeepSeek: using Enter key fallback');
+        input.focus();
+        
+        const enterEvent = new KeyboardEvent('keydown', {
+          key: 'Enter',
+          code: 'Enter',
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        input.dispatchEvent(enterEvent);
+        return true;
+      }
+      
+      return false;
+    },
+  },
 ];
 
 // ── File attachment types & helpers ───────────────────────────────────
@@ -222,12 +449,16 @@ const ATTACH_BUTTON_SELECTORS: Record<string, string> = {
   gemini: 'button[aria-label="Add files"], button[aria-label="Upload file"], button[aria-label="Add file"]',
   // Qwen: clicking "+" (ant-dropdown-trigger) opens a menu; "Загрузить вложение" is the first li
   qwen: 'span.ant-dropdown-trigger, div.mode-select span.ant-dropdown-trigger',
+  kimi: '.attachment-button, .attachment-icon, input[type="file"], label.attachment-button, button[aria-label*="Attach"]',
+  deepseek: 'button[aria-label*="attach"], button[aria-label*="file"], input[type="file"]',
 };
 
 const FILE_PREVIEW_SELECTORS: Record<string, string> = {
   grok: '[data-testid="file-preview"], .file-preview, [class*="attachment-preview"], [class*="file-pill"], [class*="uploaded"], [class*="file-chip"]',
   gemini: '.file-preview, .xap-filed-upload-preview, [class*="file-chip"], [class*="upload-preview"]',
   qwen: '.vision-item-container, [class*="vision-item"], [class*="file-item"], [class*="attachment-item"], [class*="upload-file"], [class*="file-card"]',
+  kimi: '.file-preview, .attachment-preview, .uploaded-file, [class*="file-item"], [class*="attachment-item"]',
+  deepseek: '.file-preview, .attachment-preview, [class*="file-item"], [class*="uploaded-file"]',
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────
@@ -262,6 +493,8 @@ async function waitForInputReady(siteName: string, timeout = 10000): Promise<boo
     grok: 'textarea[placeholder*="Ask"], textarea[data-testid], textarea[class*="input"], div[contenteditable="true"]',
     gemini: 'div.ql-editor[contenteditable="true"], div[contenteditable="true"][aria-label], div.textarea',
     qwen: 'textarea.message-input-textarea, #chat-input, textarea.chat-input',
+    kimi: '.chat-input-editor[contenteditable="true"], div[contenteditable="true"][data-lexical-editor="true"], .chat-input-editor',
+    deepseek: 'textarea#chat-input, textarea[placeholder*="Message DeepSeek"], textarea[placeholder*="Send a message"]',
   };
   
   const selector = inputSelectors[siteName] || 'textarea, [contenteditable="true"], input[type="text"]';
@@ -500,6 +733,8 @@ const UPLOAD_LOADING_SELECTORS: Record<string, string> = {
   qwen: '.vision-spinner, .circle-spinner, [class*="vision-spinner"], [class*="circle-spinner"]',
   grok: '[class*="uploading"], [class*="progress"], [class*="spinner"]',
   gemini: '[class*="uploading"], [class*="progress"], [class*="spinner"]',
+  kimi: '[class*="uploading"], [class*="progress"], [class*="spinner"], [class*="loading"]',
+  deepseek: '[class*="uploading"], [class*="progress"], [class*="spinner"], [class*="loading"]',
 };
 
 async function waitForFileUpload(siteName: string, maxWait = 30000): Promise<void> {

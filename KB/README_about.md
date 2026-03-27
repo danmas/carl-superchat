@@ -18,8 +18,10 @@ Chrome-расширение (Manifest V3) + Node.js сервер для **про
 | Grok | grok.com, x.com/i/grok, x.ai |
 | Gemini | gemini.google.com |
 | Qwen | chat.qwen.ai |
+| Kimi | kimi.com, kimi.moonshot.cn |
+| DeepSeek | chat.deepseek.com |
 
-> **Примечание**: В проекте также есть расширенные адаптеры для других сервисов (ChatGPT, Deepseek, Mistral, Perplexity, Kimi и др.), но основной REST API работает только с тремя сервисами выше.
+> **Примечание**: В проекте также есть расширенные адаптеры для других сервисов (ChatGPT, Mistral, Perplexity и др.), но основной REST API работает с пятью сервисами выше.
 
 ---
 
