@@ -276,7 +276,7 @@ function handleOpen(req, res) {
   readBody(req).then((body) => {
     const { site } = body;
     if (!site) {
-      return jsonResponse(res, 400, { ok: false, error: 'site is required (grok, gemini, qwen)' });
+      return jsonResponse(res, 400, { ok: false, error: 'site is required (grok, gemini, qwen, kimi, deepseek)' });
     }
 
     const id = uid();
