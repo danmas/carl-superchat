@@ -14,6 +14,8 @@ const SITE_URLS: Record<string, string> = {
   qwen: 'https://chat.qwen.ai/',
   kimi: 'https://kimi.com/',
   deepseek: 'https://chat.deepseek.com/',
+  zai: 'https://chat.z.ai/',
+  chatgpt: 'https://chatgpt.com/',
 };
 
 let ws: WebSocket | null = null;

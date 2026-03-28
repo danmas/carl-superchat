@@ -431,6 +431,206 @@ const adapters: SiteAdapter[] = [
       return false;
     },
   },
+
+  {
+    name: 'zai',
+    hostMatch: (h) => h.includes('z.ai'),
+    inputSelector: '#chat-input, textarea#chat-input, textarea[placeholder*="Ask"], div[contenteditable="true"]',
+    submitSelector: '#send-message-button, button[type="submit"], button[aria-label*="Send"]',
+    // Z.AI response structure
+    responseContainerSelector: '.markdown-body, div[class*="markdown"], div[class*="prose"]',
+
+    isGenerating() {
+      // Z.AI shows stop button while generating
+      const stop = document.querySelector('button[aria-label*="Stop"], div[class*="stop"], [class*="loading"]');
+      if (stop && stop.getBoundingClientRect().width > 0) return true;
+      return false;
+    },
+
+    getLastResponseElement() {
+      // Z.AI-specific selectors
+      const zaiSelectors = [
+        '.markdown-body',
+        'div[class*="prose"]',
+        'div[class*="assistant"] .markdown-body',
+        '[class*="message-content"] .markdown-body',
+        'div[class*="response"]',
+      ];
+      
+      for (const sel of zaiSelectors) {
+        const all = document.querySelectorAll(sel);
+        if (all.length) {
+          console.log(`[carl-superchat] Z.AI: found response with selector ${sel}, count=${all.length}`);
+          return all[all.length - 1];
+        }
+      }
+      
+      // Generic fallback
+      const fallback = document.querySelectorAll('div[class*="markdown"]');
+      if (fallback.length) return fallback[fallback.length - 1];
+      
+      return null;
+    },
+
+    async insertText(text: string) {
+      const el = findFirst(this.inputSelector) as HTMLElement | null;
+      if (!el) return false;
+      el.focus();
+
+      // Z.AI uses textarea
+      if (el.tagName === 'TEXTAREA') {
+        const textarea = el as HTMLTextAreaElement;
+        textarea.value = text;
+        textarea.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
+        textarea.dispatchEvent(new Event('change', { bubbles: true }));
+      } else if (el.hasAttribute('contenteditable')) {
+        el.textContent = '';
+        document.execCommand('selectAll', false);
+        document.execCommand('insertText', false, text);
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
+      }
+      return true;
+    },
+
+    async submit() {
+      // Try to find and click the send button
+      const btn = findFirst(this.submitSelector) as HTMLElement | null;
+      
+      if (btn) {
+        const isDisabled = btn.classList.contains('disabled') || 
+                          btn.getAttribute('aria-disabled') === 'true' ||
+                          (btn as any).disabled;
+        
+        if (!isDisabled) {
+          console.log('[carl-superchat] Z.AI: clicking send button');
+          btn.click();
+          return true;
+        }
+      }
+      
+      // Fallback: Enter key
+      const input = findFirst(this.inputSelector) as HTMLElement;
+      if (input) {
+        console.log('[carl-superchat] Z.AI: using Enter key fallback');
+        input.focus();
+        
+        const enterEvent = new KeyboardEvent('keydown', {
+          key: 'Enter',
+          code: 'Enter',
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        input.dispatchEvent(enterEvent);
+        return true;
+      }
+      
+      return false;
+    },
+  },
+
+  {
+    name: 'chatgpt',
+    hostMatch: (h) => h.includes('chatgpt.com'),
+    inputSelector: '#prompt-textarea, .ProseMirror[contenteditable="true"], div[contenteditable="true"][data-id*="prompt"]',
+    submitSelector: 'button[data-testid="send-button"], button[aria-label*="Send"], button[data-testid="fruitjuice-send-button"]',
+    // ChatGPT response structure
+    responseContainerSelector: '.markdown.prose, [data-message-author-role="assistant"] .markdown, div[class*="markdown"]',
+
+    isGenerating() {
+      // ChatGPT shows stop button while generating
+      const stop = document.querySelector('button[data-testid="stop-button"], button[aria-label*="Stop"]');
+      if (stop && stop.getBoundingClientRect().width > 0) return true;
+      // Check for loading indicators
+      const loading = document.querySelector('[class*="result-streaming"], [class*="typing"]');
+      if (loading && loading.getBoundingClientRect().width > 0) return true;
+      return false;
+    },
+
+    getLastResponseElement() {
+      // ChatGPT-specific selectors
+      const chatgptSelectors = [
+        '[data-message-author-role="assistant"] .markdown.prose',
+        '[data-message-author-role="assistant"] .markdown',
+        '.agent-turn .markdown.prose',
+        'div[class*="markdown"].prose',
+        '[class*="message"][class*="assistant"] .markdown',
+      ];
+      
+      for (const sel of chatgptSelectors) {
+        const all = document.querySelectorAll(sel);
+        if (all.length) {
+          console.log(`[carl-superchat] ChatGPT: found response with selector ${sel}, count=${all.length}`);
+          return all[all.length - 1];
+        }
+      }
+      
+      // Generic fallback
+      const fallback = document.querySelectorAll('div[class*="markdown"]');
+      if (fallback.length) return fallback[fallback.length - 1];
+      
+      return null;
+    },
+
+    async insertText(text: string) {
+      const el = findFirst(this.inputSelector) as HTMLElement | null;
+      if (!el) return false;
+      el.focus();
+
+      // ChatGPT uses ProseMirror (contenteditable)
+      if (el.classList.contains('ProseMirror') || el.hasAttribute('contenteditable')) {
+        // Clear existing content
+        el.innerHTML = '';
+        // Insert text via execCommand for ProseMirror compatibility
+        document.execCommand('insertText', false, text);
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
+      } else if (el.tagName === 'TEXTAREA') {
+        const textarea = el as HTMLTextAreaElement;
+        textarea.value = text;
+        textarea.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
+        textarea.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      return true;
+    },
+
+    async submit() {
+      // Try to find and click the send button
+      const btn = findFirst(this.submitSelector) as HTMLElement | null;
+      
+      if (btn) {
+        const isDisabled = btn.classList.contains('disabled') || 
+                          btn.getAttribute('aria-disabled') === 'true' ||
+                          (btn as any).disabled;
+        
+        if (!isDisabled) {
+          console.log('[carl-superchat] ChatGPT: clicking send button');
+          btn.click();
+          return true;
+        }
+      }
+      
+      // Fallback: Enter key
+      const input = findFirst(this.inputSelector) as HTMLElement;
+      if (input) {
+        console.log('[carl-superchat] ChatGPT: using Enter key fallback');
+        input.focus();
+        
+        const enterEvent = new KeyboardEvent('keydown', {
+          key: 'Enter',
+          code: 'Enter',
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        input.dispatchEvent(enterEvent);
+        return true;
+      }
+      
+      return false;
+    },
+  },
 ];
 
 // ── File attachment types & helpers ───────────────────────────────────
@@ -451,6 +651,8 @@ const ATTACH_BUTTON_SELECTORS: Record<string, string> = {
   qwen: 'span.ant-dropdown-trigger, div.mode-select span.ant-dropdown-trigger',
   kimi: '.attachment-button, .attachment-icon, input[type="file"], label.attachment-button, button[aria-label*="Attach"]',
   deepseek: 'button[aria-label*="attach"], button[aria-label*="file"], input[type="file"]',
+  zai: 'button[aria-label*="More"], button[aria-label*="attach"], input[type="file"]',
+  chatgpt: '#upload-file-btn, button[aria-label*="Add photos"], button[data-testid="composer-action-file-upload"], input[type="file"]',
 };
 
 const FILE_PREVIEW_SELECTORS: Record<string, string> = {
@@ -459,6 +661,8 @@ const FILE_PREVIEW_SELECTORS: Record<string, string> = {
   qwen: '.vision-item-container, [class*="vision-item"], [class*="file-item"], [class*="attachment-item"], [class*="upload-file"], [class*="file-card"]',
   kimi: '.file-preview, .attachment-preview, .uploaded-file, [class*="file-item"], [class*="attachment-item"]',
   deepseek: '.file-preview, .attachment-preview, [class*="file-item"], [class*="uploaded-file"]',
+  zai: '.file-preview, [class*="file-item"], [class*="uploaded"], div.px-3.pb-3',
+  chatgpt: '.file-preview, .attachment-preview, [data-testid="file-attachment"], [class*="file-chip"]',
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────
@@ -495,6 +699,8 @@ async function waitForInputReady(siteName: string, timeout = 10000): Promise<boo
     qwen: 'textarea.message-input-textarea, #chat-input, textarea.chat-input',
     kimi: '.chat-input-editor[contenteditable="true"], div[contenteditable="true"][data-lexical-editor="true"], .chat-input-editor',
     deepseek: 'textarea#chat-input, textarea[placeholder*="Message DeepSeek"], textarea[placeholder*="Send a message"]',
+    zai: '#chat-input, textarea#chat-input, textarea[placeholder*="Ask"]',
+    chatgpt: '#prompt-textarea, .ProseMirror[contenteditable="true"], div[contenteditable="true"][data-id*="prompt"]',
   };
   
   const selector = inputSelectors[siteName] || 'textarea, [contenteditable="true"], input[type="text"]';
@@ -735,6 +941,8 @@ const UPLOAD_LOADING_SELECTORS: Record<string, string> = {
   gemini: '[class*="uploading"], [class*="progress"], [class*="spinner"]',
   kimi: '[class*="uploading"], [class*="progress"], [class*="spinner"], [class*="loading"]',
   deepseek: '[class*="uploading"], [class*="progress"], [class*="spinner"], [class*="loading"]',
+  zai: '[class*="uploading"], [class*="progress"], [class*="spinner"], [class*="loading"]',
+  chatgpt: '[class*="uploading"], [class*="progress"], [class*="spinner"], [class*="loading"]',
 };
 
 async function waitForFileUpload(siteName: string, maxWait = 30000): Promise<void> {
