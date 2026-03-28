@@ -1,6 +1,6 @@
 # carl-superchat
 
-Chrome-расширение + Node.js сервер для программного взаимодействия с AI-чатами (Grok, Gemini, Qwen, Kimi, DeepSeek) через реальный браузер.
+Chrome-расширение + Node.js сервер для программного взаимодействия с AI-чатами (Grok, Gemini, Qwen, Kimi, DeepSeek, Z.AI, ChatGPT) через реальный браузер.
 
 Расширение инжектится в открытые вкладки AI-чатов, принимает команды от сервера по WebSocket, вставляет сообщения в чат, наблюдает за ответом AI и стримит его обратно. REST API позволяет интегрировать любой GUI или бэкенд.
 
@@ -76,7 +76,7 @@ bun run start
 
 ### 5. Использование
 
-1. Открой в Chrome один из AI-чатов: [grok.com](https://grok.com), [gemini.google.com](https://gemini.google.com), [chat.qwen.ai](https://chat.qwen.ai), [kimi.com](https://kimi.com), [chat.deepseek.com](https://chat.deepseek.com)
+1. Открой в Chrome один из AI-чатов: [grok.com](https://grok.com), [gemini.google.com](https://gemini.google.com), [chat.qwen.ai](https://chat.qwen.ai), [kimi.com](https://kimi.com), [chat.deepseek.com](https://chat.deepseek.com), [chat.z.ai](https://chat.z.ai), [chatgpt.com](https://chatgpt.com)
 2. Открой тестовую страницу `http://localhost:3010/`
 3. Выбери сайт, напиши сообщение (или прикрепи файл кнопкой **📎**), нажми Send
 
@@ -298,6 +298,8 @@ carl-superchat/
 | Qwen Chat | `chat.qwen.ai` | `qwen` | да |
 | Kimi | `kimi.com`, `kimi.moonshot.cn` | `kimi` | да |
 | DeepSeek | `chat.deepseek.com` | `deepseek` | да |
+| Z.AI | `chat.z.ai`, `z.ai` | `zai` | да |
+| ChatGPT | `chatgpt.com` | `chatgpt` | да |
 
 ## Настройка порта
 

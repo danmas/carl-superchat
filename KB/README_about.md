@@ -20,8 +20,10 @@ Chrome-расширение (Manifest V3) + Node.js сервер для **про
 | Qwen | chat.qwen.ai |
 | Kimi | kimi.com, kimi.moonshot.cn |
 | DeepSeek | chat.deepseek.com |
+| Z.AI | chat.z.ai, z.ai |
+| ChatGPT | chatgpt.com |
 
-> **Примечание**: В проекте также есть расширенные адаптеры для других сервисов (ChatGPT, Mistral, Perplexity и др.), но основной REST API работает с пятью сервисами выше.
+> **Примечание**: В проекте также есть расширенные адаптеры для других сервисов (Mistral, Perplexity и др.), но основной REST API работает с семью сервисами выше.
 
 ---
 
